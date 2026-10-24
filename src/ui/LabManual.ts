@@ -81,7 +81,7 @@ const SECTIONS: Section[] = [
     id: 'overview',
     title: 'Overview',
     body:
-      'SimCPU combines a transistor-level schematic editor, Soft Lab digital chips, and an optional soft Z80 / Spectrum machine.\n\n' +
+      'SwitchLab combines a transistor-level schematic editor, Soft Lab digital chips, and an optional soft Z80 / Spectrum machine.\n\n' +
       'Use the tree on the left. Drag the window corner to resize.\n\n' +
       'Quick paths:\n' +
       '  • Digital Soft Lab → Lab course / Tutorial (lab counter)\n' +

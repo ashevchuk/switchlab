@@ -1,8 +1,8 @@
-# SimCPU — quick user guide
+# SwitchLab — quick user guide
 
 A transistor-level schematic editor with live simulation, foldable chips, Soft Lab, and an optional soft Z80 machine.
 
-**Try online:** [ashevchuk.github.io/simcpu](https://ashevchuk.github.io/simcpu/) (GitHub Pages build of `dist-file/`). Overview + screenshot gallery: **[README.md](./README.md)**.
+**Try online:** [ashevchuk.github.io/switchlab](https://ashevchuk.github.io/switchlab/) (GitHub Pages build of `dist-file/`). Overview + screenshot gallery: **[README.md](./README.md)**.
 
 **In-app docs:** Help → **Lab manual…** (resizable; tree: Menus · Soft Lab · Soft machine). Covers File/Place/Insert/…, Soft Lab, **Logic analyzer** (with waveforms), ROM/RAM/Z80, and Spectrum step-by-step (**Load images**, demos, tape, pad, debug). Screenshots in `src/assets/help/` — refresh with `scripts/capture-lab-help*.mts`.
 

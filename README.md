@@ -1,4 +1,4 @@
-# SimCPU
+# SwitchLab
 
 **Transistor-level schematic editor** with live switch-level simulation, foldable chips, a Soft Lab digital pack, and an optional soft Z80 machine (TTY, ZX Spectrum, CP/M) — all in the browser.
 
@@ -7,15 +7,15 @@
 ### Try it in the browser
 
 **Live build (GitHub Pages):**  
-**https://ashevchuk.github.io/simcpu/**
+**https://ashevchuk.github.io/switchlab/**
 
 | Demo deep-link | What it loads |
 |----------------|---------------|
-| [`#e=lab-counter-7seg`](https://ashevchuk.github.io/simcpu/#e=lab-counter-7seg) | Soft Lab counter → BCD → 7-seg |
-| [`#e=cmos-inverter`](https://ashevchuk.github.io/simcpu/#e=cmos-inverter) | Button → CMOS inverter → LED |
-| [`#e=lab-alu4`](https://ashevchuk.github.io/simcpu/#e=lab-alu4) | 4-bit ALU bench |
-| [`#demo=rainbow`](https://ashevchuk.github.io/simcpu/#demo=rainbow) | Soft Spectrum 48K + rainbow demo |
-| [`#demo=glazx`](https://ashevchuk.github.io/simcpu/#demo=glazx) | Soft Spectrum TAP demo (GLAZX) |
+| [`#e=lab-counter-7seg`](https://ashevchuk.github.io/switchlab/#e=lab-counter-7seg) | Soft Lab counter → BCD → 7-seg |
+| [`#e=cmos-inverter`](https://ashevchuk.github.io/switchlab/#e=cmos-inverter) | Button → CMOS inverter → LED |
+| [`#e=lab-alu4`](https://ashevchuk.github.io/switchlab/#e=lab-alu4) | 4-bit ALU bench |
+| [`#demo=rainbow`](https://ashevchuk.github.io/switchlab/#demo=rainbow) | Soft Spectrum 48K + rainbow demo |
+| [`#demo=glazx`](https://ashevchuk.github.io/switchlab/#demo=glazx) | Soft Spectrum TAP demo (GLAZX) |
 
 > **Hosted build:** the live site is the `gh-pages` branch (a publish of `dist-file/`).  
 > Refresh it after routing/UI changes with `npm run build:dist-file` and a force-push to `gh-pages` (see [Publishing](#publishing--github-pages)).
@@ -186,8 +186,8 @@ Solver is a **switch-level** relaxation engine over transistors (not a gate-only
 ## Getting started
 
 ```bash
-git clone https://github.com/ashevchuk/simcpu.git
-cd simcpu
+git clone https://github.com/ashevchuk/switchlab.git
+cd switchlab
 npm install
 npm run dev
 ```
@@ -343,7 +343,7 @@ dist-file/        Generated static app (gitignored; published on `gh-pages`)
 
 ## Third-party / licenses
 
-**SimCPU source** (this repository, excluding `third_party/`) is licensed under the **[MIT License](./LICENSE)**.
+**SwitchLab source** (this repository, excluding `third_party/`) is licensed under the **[MIT License](./LICENSE)**.
 
 Bundled firmware and disk images keep their upstream terms:
 
@@ -354,7 +354,7 @@ Bundled firmware and disk images keep their upstream terms:
 
 ## Publishing / GitHub Pages
 
-**Live app:** https://ashevchuk.github.io/simcpu/
+**Live app:** https://ashevchuk.github.io/switchlab/
 
 The static build is published from the **`gh-pages`** branch (contents of `dist-file/`: `index.html`, `app.js`, `spectrum-worker.js`). Relative `base: './'` keeps assets working under the project subpath.
 
@@ -363,11 +363,11 @@ The static build is published from the **`gh-pages`** branch (contents of `dist-
 ```bash
 npm run build:dist-file
 # copy dist-file/* onto an orphan/local gh-pages worktree and force-push:
-rm -rf /tmp/simcpu-gh-pages && mkdir -p /tmp/simcpu-gh-pages
-cp -a dist-file/. /tmp/simcpu-gh-pages/
-cd /tmp/simcpu-gh-pages && git init && git checkout -b gh-pages
+rm -rf /tmp/switchlab-gh-pages && mkdir -p /tmp/switchlab-gh-pages
+cp -a dist-file/. /tmp/switchlab-gh-pages/
+cd /tmp/switchlab-gh-pages && git init && git checkout -b gh-pages
 git add -A && git commit -m "Publish dist-file build for GitHub Pages."
-git remote add origin https://github.com/ashevchuk/simcpu.git
+git remote add origin https://github.com/ashevchuk/switchlab.git
 git push -f origin gh-pages
 ```
 

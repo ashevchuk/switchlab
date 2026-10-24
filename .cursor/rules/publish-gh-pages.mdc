@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Publish GitHub Pages after commit and push
 
-When the user asks to **commit and push** (or a commit-and-push action succeeds), also refresh the hosted app at https://ashevchuk.github.io/simcpu/ (repo https://github.com/ashevchuk/simcpu).
+When the user asks to **commit and push** (or a commit-and-push action succeeds), also refresh the hosted app at https://ashevchuk.github.io/switchlab/ (repo https://github.com/ashevchuk/switchlab).
 
 ## Steps (after a successful push to the default branch)
 
@@ -14,14 +14,14 @@ When the user asks to **commit and push** (or a commit-and-push action succeeds)
 
 ```bash
 npm run build:dist-file
-rm -rf /tmp/simcpu-gh-pages && mkdir -p /tmp/simcpu-gh-pages
-cp -a dist-file/. /tmp/simcpu-gh-pages/
-cd /tmp/simcpu-gh-pages && git init && git checkout -b gh-pages
+rm -rf /tmp/switchlab-gh-pages && mkdir -p /tmp/switchlab-gh-pages
+cp -a dist-file/. /tmp/switchlab-gh-pages/
+cd /tmp/switchlab-gh-pages && git init && git checkout -b gh-pages
 git add -A && git commit -m "Publish dist-file build for GitHub Pages."
-git remote add origin https://github.com/ashevchuk/simcpu.git
+git remote add origin https://github.com/ashevchuk/switchlab.git
 git push -f origin gh-pages
 ```
 
-3. Confirm the live URL: https://ashevchuk.github.io/simcpu/
+3. Confirm the live URL: https://ashevchuk.github.io/switchlab/
 
 Skip Pages publish only if the user explicitly says not to, or the push was not to this repo / not meant for the live site.

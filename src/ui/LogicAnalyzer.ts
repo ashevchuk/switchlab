@@ -637,7 +637,7 @@ export class LogicAnalyzer {
       `  ${new Date().toISOString()}`,
       '$end',
       '$version',
-      '  simcpu Logic Analyzer',
+      '  switchlab Logic Analyzer',
       '$end',
       '$timescale 1 ns $end',
       '$scope module logic $end',
