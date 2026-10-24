@@ -1,5 +1,5 @@
 {
-  "name": "z80-circuit-sim",
+  "name": "switchlab",
   "version": "0.1.0",
   "private": true,
   "description": "Transistor-level circuit simulator with Soft Lab chips and an in-browser Z80 / ZX Spectrum machine.",
