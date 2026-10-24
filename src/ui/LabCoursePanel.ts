@@ -9,7 +9,7 @@ import {
   type LabCurriculumStep,
 } from './LabCurriculum.js';
 
-const STORAGE_KEY = 'simcpu.labCourseChecks.v1';
+const STORAGE_KEY = 'switchlab.labCourseChecks.v1';
 
 function loadChecks(): Record<string, boolean[]> {
   try {

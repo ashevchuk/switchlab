@@ -19,7 +19,7 @@ export type SoftLabState = {
   q: Uint8Array;
 };
 
-const SOFT_LAB_LS_KEY = 'simcpu.softLab.v1';
+const SOFT_LAB_LS_KEY = 'switchlab.softLab.v1';
 
 let softLabEnabled = true;
 

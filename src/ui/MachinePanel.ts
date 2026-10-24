@@ -130,14 +130,14 @@ export class MachinePanel {
   private lastStatusText = '';
   private lastRegsText = '';
   private sessionCheats: { addr: number; val: number }[] = [];
-  private cheatStorageKey = 'simcpu-spectrum-cheats';
+  private cheatStorageKey = 'switchlab-spectrum-cheats';
   /** Optional: copy #sna= link (wired from main). */
   onCopySnaLink: (() => void) | null = null;
   private pauseTipEl: HTMLElement | null = null;
   private focusTipEl: HTMLElement | null = null;
   private healthEl: HTMLElement | null = null;
   private currentDemoId: string | null = null;
-  private readonly slotStorageKey = 'simcpu-spectrum-slots-v1';
+  private readonly slotStorageKey = 'switchlab-spectrum-slots-v1';
   private slotFilled = [false, false, false, false];
   private lastHealthText = '';
 

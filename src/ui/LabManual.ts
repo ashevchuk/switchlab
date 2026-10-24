@@ -228,7 +228,7 @@ const SECTIONS: Section[] = [
     id: 'soft-lab',
     title: 'Soft Lab toggle',
     body:
-      'Toolbar Soft Lab (default ON; localStorage simcpu.softLab.v1).\n\n' +
+      'Toolbar Soft Lab (default ON; localStorage switchlab.softLab.v1).\n\n' +
       'ON — matching chips stay opaque; solver uses behavioral models (fast). SOFT badge + optional q hex\n' +
       '    only while Soft-opaque (hidden when dive/inspector force-expands that ChipDef to silicon).\n' +
       'OFF — expand to gates/transistors (slow; teaching CMOS).\n\n' +

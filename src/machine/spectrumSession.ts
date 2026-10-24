@@ -6,7 +6,7 @@
 
 import type { SpectrumModel } from './spectrum/mmu.js';
 
-const KEY = 'simcpu.spectrumSession.v1';
+const KEY = 'switchlab.spectrumSession.v1';
 
 export interface SpectrumSessionHint {
   model: SpectrumModel;

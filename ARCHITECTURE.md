@@ -1003,7 +1003,7 @@ cached).
 from the prior Place are ordinary components, not runner-owned). Soft /
 Spectrum work; **Gates** stays Soft-only until File → Demo → Spectrum (or
 Insert → Z80) places a new gate CPU. Spectrum soft session hints
-(`simcpu.spectrumSession.v1`: model + last bundled demo id) restore ROM
+(`switchlab.spectrumSession.v1`: model + last bundled demo id) restore ROM
 boot and optionally re-Load that demo — not full MMU/tape state (use
 `.SNA` / slots / `#sna=` for snapshots).
 

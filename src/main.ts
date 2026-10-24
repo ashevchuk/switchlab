@@ -150,7 +150,7 @@ const objectInspector = new ObjectInspector();
 const watchList = new WatchList();
 const ioMapViewer = new IoMapViewer();
 
-const WATCH_LS_KEY = 'simcpu.watches.v1';
+const WATCH_LS_KEY = 'switchlab.watches.v1';
 function loadPersistedWatches(): string[] {
   try {
     const raw = localStorage.getItem(WATCH_LS_KEY);

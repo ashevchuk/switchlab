@@ -3,16 +3,16 @@
  * does not wipe work, and so several projects can live side-by-side.
  *
  * Prefer localStorage (sync). Oversized payloads fall back to IndexedDB.
- * Legacy key `simcpu.autosave.v1` migrates into slot "1" on first access.
+ * Legacy key `switchlab.autosave.v1` migrates into slot "1" on first access.
  */
 
 import type { SerializedProject } from './serialize.js';
 
 export const MAX_SLOTS = 3;
 
-const META_KEY = 'simcpu.sessions.v1';
-const LEGACY_KEY = 'simcpu.autosave.v1';
-const IDB_NAME = 'simcpu';
+const META_KEY = 'switchlab.sessions.v1';
+const LEGACY_KEY = 'switchlab.autosave.v1';
+const IDB_NAME = 'switchlab';
 const IDB_STORE = 'autosave';
 
 export interface SessionSlotMeta {
@@ -29,7 +29,7 @@ export interface SessionMeta {
 }
 
 function lsSlotKey(id: string): string {
-  return `simcpu.slot.${id}`;
+  return `switchlab.slot.${id}`;
 }
 
 function idbSlotKey(id: string): string {
