@@ -241,7 +241,9 @@ function serializeCircuit(circuit: Circuit): SerializedCircuit {
 export type CircuitSnapshot = SerializedCircuit;
 
 export function captureCircuit(circuit: Circuit): CircuitSnapshot {
-  return serializeCircuit(circuit);
+  // serializeCircuit copies components shallowly, so their pins would be shared
+  // with the live circuit and follow every later move of the component.
+  return structuredClone(serializeCircuit(circuit));
 }
 
 /** Replace `circuit`'s contents with a snapshot (keeps the same Circuit object). */
