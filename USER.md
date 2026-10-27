@@ -10,10 +10,12 @@ A transistor-level schematic editor with live simulation, foldable chips, Soft L
 
 - **Tools:** `1` select, `2` pan, `3` wire (or the toolbar). Space + drag also pans; right-drag pans.
 - **Place** menu (or hotkeys `4`–`9`, `B`, `E`, `K`, `O`, `L`, `S`) drops transistors, rails, I/O, probes, **bus probes**, **bus switches** (DIP paddles — click a bit to toggle; click the readout to step +1), labels, clocks, analyzers, **7-seg**.
-- **Wire** tool: click pin → click pin (smart ortho route). Click empty for bends; click a wire/bend to place a **node** (T-junction) and branch. Delete a node heals the through-wire and drops only branch stubs. Esc backs up a bend or cancels.
-- **T** tidies selected wires (orthogonal route). Arrow keys nudge selection by one grid; after nudge, attached wires tidy.
+- **Wire** tool: click pin → click pin; the dashed preview is the route that will be committed (channel router, avoids chip bodies and other wires). Click empty space to place bends and take over the route by hand. Click a wire/bend to place a **node** (T-junction) and branch. Delete a node heals the through-wire and drops only branch stubs. Esc backs up a bend or cancels.
+- **Editing a wire** (select tool): drag a segment to slide it sideways, drag a corner to move it; legs stay orthogonal and the pin exits are kept. A dragged part snaps to a gap beside a chip body, to a gap beside another wire (never onto it, so wires do not glue together), to a pin's row or column, and to the grid; a dashed guide line shows what it snapped to. The part keeps its offset from the cursor, so it does not jump when grabbed. Esc cancels the drag. Select a wire first to drag it where a component's hit box overlaps it. Double-click a corner to remove it. A hand-shaped wire is left alone by nudge, rotate, flip and **Tidy all** while its shape is still orthogonal and clear of bodies; otherwise the router takes it back.
+- Context **Separate wires** sets wires of different nets that run on top of each other, or closer than a gap, side by side. With two or more wires selected it works on those only.
+- **T** tidies the selection. Selecting the wire itself and pressing **T** always re-routes it automatically and drops its manual shape. Arrow keys nudge selection by one grid; after a nudge, attached automatic wires tidy.
 - Context **Wire matching / bus pins** also ribbons a chip to selected **Input/Button** banks (sorted by Y → `d0`/`q0`/`b0`…). Ribbon wires get a cosmetic `bundleId` (thicker bus stroke).
-- Auto-routing can still pick awkward paths around bodies — use manual bends or **T**; algorithm notes for a future stand: [`docs/wire-routing.md`](./docs/wire-routing.md).
+- Auto-routing can still pick awkward paths around bodies — drag a segment or select the wire and press **T**; algorithm notes for a future stand: [`docs/wire-routing.md`](./docs/wire-routing.md).
 
 ## Orient
 

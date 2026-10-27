@@ -298,39 +298,49 @@ export function draw(
     const start = pinById.get(editor.wireStartPinId);
     if (start) {
       const hoverPin = editor.hoveredPinId ? pinById.get(editor.hoveredPinId) : undefined;
-      const exclude = new Set<string>([start.componentId]);
-      if (hoverPin) exclude.add(hoverPin.componentId);
-      const startComp = circuit.components.get(start.componentId);
-      const endComp = hoverPin ? circuit.components.get(hoverPin.componentId) : undefined;
-      const avoidCrossings: Point[][] = [];
-      for (const w of circuit.wires.values()) {
-        const poly = rawWirePolyline(circuit, w);
-        if (poly) avoidCrossings.push(routeWirePoints(poly));
+      const points = editor.routeNewWire(
+        start.id,
+        editor.wireWaypoints,
+        hoverPin?.id ?? null,
+        editor.mouse,
+      );
+      if (points) {
+        ctx.save();
+        ctx.strokeStyle = COLOR.hover;
+        ctx.lineWidth = 1.5;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.setLineDash([5, 5]);
+        strokeRoundedPolyline(ctx, points, 7);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = COLOR.hover;
+        for (const p of editor.wireWaypoints) {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
       }
-      const raw = [start.pos, ...editor.wireWaypoints, hoverPin?.pos ?? editor.mouse];
-      const points = routeWirePoints(raw, {
-        obstacles: routingObstacles(circuit, exclude),
-        startDir: pinRouteDir(start.pos, startComp),
-        endDir: hoverPin ? pinRouteDir(hoverPin.pos, endComp) : null,
-        avoidCrossings,
-      });
-      ctx.save();
-      ctx.strokeStyle = COLOR.hover;
-      ctx.lineWidth = 1.5;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.setLineDash([5, 5]);
-      strokeRoundedPolyline(ctx, points, 7);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = COLOR.hover;
-      for (const p of editor.wireWaypoints) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
     }
+  }
+
+  const guide = editor.wireGuide;
+  if (guide) {
+    ctx.save();
+    ctx.strokeStyle = COLOR.hover;
+    ctx.lineWidth = 1 / camera.scale;
+    ctx.setLineDash([4 / camera.scale, 4 / camera.scale]);
+    ctx.beginPath();
+    if (guide.axis === 'x') {
+      ctx.moveTo(guide.value, topLeft.y);
+      ctx.lineTo(guide.value, bottomRight.y);
+    } else {
+      ctx.moveTo(topLeft.x, guide.value);
+      ctx.lineTo(bottomRight.x, guide.value);
+    }
+    ctx.stroke();
+    ctx.restore();
   }
 
   for (const c of circuit.components.values()) {

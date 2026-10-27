@@ -42,7 +42,6 @@ import {
   GRID,
   interiorWaypoints,
   nearestOnPolyline,
-  orthoCorners,
   pinExitDir,
   pinRouteDir,
   rawWirePolyline,
@@ -54,7 +53,6 @@ import {
   simplifyOrthoPath,
   pathHitsObstacles,
   wireApproachLanes,
-  wireLaneOf,
   wirePolyline,
   type RouteLane,
   type RouteOpts,
@@ -65,6 +63,9 @@ import {
   OVERLAP_BASE,
   type RibbonWire,
 } from './routeChannel.js';
+import { spreadOverlaps } from './wireSpread.js';
+import { laneTargets, snapLane, type Axis, type SnapTarget } from './laneSnap.js';
+import { dragCorner, dragSegment, dropReversals, nearestCorner, nearestLeg } from './wireEdit.js';
 
 export type SnapMode = 'grid' | 'half' | 'free';
 
@@ -92,6 +93,7 @@ export type Tool =
   | { kind: 'port'; promptName?: boolean }
   | { kind: 'place-chip'; defId: string }; // place an instance of an existing ChipDef
 
+const SNAP_REACH_PX = 6; // screen px within which a wire part is pulled onto a gap or pin line
 const DRAG_THRESHOLD = 4; // px of mouse movement before a mousedown becomes a drag, not a click
 
 /**
@@ -142,10 +144,25 @@ export class Editor {
   /** True once per drag gesture after the first real move (undo checkpoint). */
   private dragCheckpointTaken = false;
 
-  /** An existing bend point currently being dragged. */
-  private dragWaypoint: { wireId: string; index: number } | null = null;
-  /** Mousedown landed on a wire segment (not an existing bend point) — becomes a real inserted waypoint only past DRAG_THRESHOLD, so a plain click just selects the wire instead of kinking it. */
-  private pendingWireGrab: { wireId: string; insertIndex: number; downPoint: Point } | null = null;
+  /** A bend or segment of a drawn wire being dragged; `base` is the drawn path captured at grab time. */
+  private dragWire: {
+    wireId: string;
+    kind: 'corner' | 'segment';
+    index: number;
+    base: Point[];
+    /** Grabbed vertex (corner) or leg line (segment) minus the pointer, so the grab never jumps. */
+    offset: Point;
+    /** Axis perpendicular to the dragged leg; unused for corners. */
+    axis: Axis;
+    targets: Record<Axis, SnapTarget[]>;
+    restore: { waypoints?: Point[]; manual?: boolean };
+  } | null = null;
+  /** World units per screen pixel; set by main.ts so snap reach feels the same at any zoom. */
+  worldPerPixel = 1;
+  /** Alignment line shown while a dragged wire part is pulled onto a body, wire or pin gap. */
+  wireGuide: { axis: Axis; value: number } | null = null;
+  /** Mousedown landed on a wire segment (not an existing bend point) — becomes a segment drag only past DRAG_THRESHOLD, so a plain click just selects the wire. */
+  private pendingWireGrab: { wireId: string; downPoint: Point } | null = null;
   /** Mousedown landed on a component — becomes an actual move only past DRAG_THRESHOLD, so a plain click still just (multi-)selects/toggles it. */
   private pendingComponentDrag: { ids: string[]; downPoint: Point } | null = null;
   /** The component(s) actually being dragged right now, and where the pointer was last frame (moves are applied as deltas, never absolute jumps). */
@@ -165,7 +182,7 @@ export class Editor {
 
   /** True while a component or a wire's bend point is being actively dragged — for cursor feedback, see main.ts. */
   get isDragging(): boolean {
-    return this.draggingComponents !== null || this.dragWaypoint !== null;
+    return this.draggingComponents !== null || this.dragWire !== null;
   }
 
   /** Snap a world point according to `snapMode`, then magnet to nearby pin axes. */
@@ -276,7 +293,12 @@ export class Editor {
       }
     }
 
-    const hit = findComponentNear(this.circuit, p);
+    // Component hit boxes overlap their pin stubs, so a wire bend (always) and a
+    // segment of a selected wire win over the component. Searching the selected
+    // wires alone keeps this true when an unselected wire lies on top of them.
+    const selectedHit = findWireNear(this.circuit, p, 6, this.selectedWireIds);
+    const wireFirst = findWaypointNear(this.circuit, p) !== undefined || selectedHit !== undefined;
+    const hit = wireFirst ? undefined : findComponentNear(this.circuit, p);
     if (hit) {
       // Dragging an already-multi-selected component moves the whole
       // selection together; dragging anything else is just that one part
@@ -317,15 +339,15 @@ export class Editor {
 
     const wp = findWaypointNear(this.circuit, p);
     if (wp) {
-      this.dragWaypoint = wp;
+      this.beginWireDrag(wp.wireId, 'corner', p);
       this.selectedWireId = wp.wireId;
       this.selectedIds.clear();
       return;
     }
 
-    const wireHit = findWireNear(this.circuit, p);
+    const wireHit = selectedHit ?? findWireNear(this.circuit, p);
     if (wireHit) {
-      this.pendingWireGrab = { ...wireHit, downPoint: p };
+      this.pendingWireGrab = { wireId: wireHit.wireId, downPoint: p };
       this.selectedWireId = wireHit.wireId;
       this.selectedIds.clear();
       this.highlightNetOfWire(wireHit.wireId);
@@ -365,31 +387,20 @@ export class Editor {
       return;
     }
     if (this.pendingWireGrab) {
-      const { wireId, insertIndex, downPoint } = this.pendingWireGrab;
+      const { wireId, downPoint } = this.pendingWireGrab;
       if (Math.hypot(p.x - downPoint.x, p.y - downPoint.y) > DRAG_THRESHOLD) {
-        if (!this.dragCheckpointTaken) {
-          this.noteEdit();
-          this.dragCheckpointTaken = true;
-        }
-        const wire = this.circuit.wires.get(wireId);
-        if (wire) {
-          const waypoints = wire.waypoints ? [...wire.waypoints] : [];
-          waypoints.splice(insertIndex, 0, this.getSnap(p));
-          wire.waypoints = waypoints;
-        }
-        this.dragWaypoint = { wireId, index: insertIndex };
+        this.beginWireDrag(wireId, 'segment', downPoint);
         this.pendingWireGrab = null;
         this.dragging = true;
       }
-      return;
+      if (!this.dragWire) return;
     }
-    if (this.dragWaypoint) {
+    if (this.dragWire) {
       if (!this.dragCheckpointTaken) {
         this.noteEdit();
         this.dragCheckpointTaken = true;
       }
-      const wire = this.circuit.wires.get(this.dragWaypoint.wireId);
-      if (wire?.waypoints) wire.waypoints[this.dragWaypoint.index] = this.getSnap(p);
+      this.applyWireDrag(p);
       this.dragging = true;
       return;
     }
@@ -448,13 +459,10 @@ export class Editor {
     }
     this.pendingComponentDrag = null; // never promoted past the threshold — a plain click, see performClick
 
-    if (this.dragWaypoint) {
-      const wire = this.circuit.wires.get(this.dragWaypoint.wireId);
-      if (wire?.waypoints) {
-        wire.waypoints[this.dragWaypoint.index] = this.getSnap(p);
-        cleanupStoredWaypoints(this.circuit, wire);
-      }
-      this.dragWaypoint = null;
+    if (this.dragWire) {
+      this.applyWireDrag(p);
+      this.dragWire = null;
+      this.wireGuide = null;
       didDrag = true;
     }
     this.pendingWireGrab = null; // never promoted past the threshold — a plain click, nothing to commit
@@ -486,6 +494,129 @@ export class Editor {
     this.dragging = false;
 
     if (!didDrag) this.performClick(p, additive);
+  }
+
+  private beginWireDrag(wireId: string, kind: 'corner' | 'segment', grab: Point): void {
+    const wire = this.circuit.wires.get(wireId);
+    const drawn = wire && wirePolyline(this.circuit, wire);
+    if (!wire || !drawn) return;
+    const base = dropReversals(drawn);
+    const index = kind === 'corner' ? nearestCorner(base, grab) : nearestLeg(base, grab);
+    if (index < 0) return;
+    let offset: Point;
+    let axis: Axis = 'x';
+    if (kind === 'corner') {
+      const v = base[index]!;
+      offset = { x: v.x - grab.x, y: v.y - grab.y };
+    } else {
+      const a = base[index]!;
+      const b = base[index + 1]!;
+      axis = Math.abs(a.x - b.x) < 0.5 ? 'x' : 'y';
+      offset = axis === 'x' ? { x: a.x - grab.x, y: 0 } : { x: 0, y: a.y - grab.y };
+    }
+    const others: Point[][] = [];
+    for (const ow of this.circuit.wires.values()) {
+      if (ow.id === wireId) continue;
+      const poly = wirePolyline(this.circuit, ow);
+      if (poly) others.push(poly);
+    }
+    const obstacles = routingObstacles(this.circuit);
+    const pins = this.circuit.allPins().map((p) => p.pos);
+    this.dragWire = {
+      wireId,
+      kind,
+      index,
+      base,
+      offset,
+      axis,
+      targets: {
+        x: laneTargets('x', obstacles, others, pins),
+        y: laneTargets('y', obstacles, others, pins),
+      },
+      restore: { waypoints: wire.waypoints?.map((p) => ({ ...p })), manual: wire.manual },
+    };
+  }
+
+  /** Re-shape the dragged wire from its grab-time path so the cursor never accumulates error. */
+  private applyWireDrag(pointer: Point): void {
+    const drag = this.dragWire;
+    const wire = drag && this.circuit.wires.get(drag.wireId);
+    if (!drag || !wire) return;
+    const tolerance = SNAP_REACH_PX * this.worldPerPixel;
+    const gridStep = this.snapMode === 'grid' ? GRID : this.snapMode === 'half' ? GRID / 2 : null;
+    this.wireGuide = null;
+    const settle = (value: number, axis: Axis): number => {
+      const r = snapLane(value, drag.targets[axis], tolerance, gridStep);
+      if (r.target && r.target.kind !== 'grid') this.wireGuide = { axis, value: r.value };
+      return r.value;
+    };
+    let path: Point[];
+    if (drag.kind === 'corner') {
+      const target = {
+        x: settle(pointer.x + drag.offset.x, 'x'),
+        y: settle(pointer.y + drag.offset.y, 'y'),
+      };
+      path = dragCorner(drag.base, drag.index, target);
+    } else {
+      const value = settle(drag.offset[drag.axis] + pointer[drag.axis], drag.axis);
+      path = dragSegment(drag.base, drag.index, drag.axis === 'x' ? { x: value, y: pointer.y } : { x: pointer.x, y: value });
+    }
+    const mid = interiorWaypoints(path);
+    if (mid.length > 0) wire.waypoints = mid;
+    else delete wire.waypoints;
+    wire.manual = true;
+  }
+
+  /**
+   * Set wires that run on top of, or right beside, each other apart. With two or more
+   * wires selected only those are considered; otherwise every wire is. Different nets only:
+   * same-net wires sharing a trunk is intended. Returns how many wires moved.
+   */
+  separateWires(): number {
+    const scope = this.selectedWireIds.size >= 2 ? this.selectedWireIds : null;
+    const nets = this.circuit.computeNets();
+    const netOf = (id: string) => {
+      const w = this.circuit.wires.get(id);
+      return w ? nets.netOf.get(w.a) : undefined;
+    };
+    const paths = new Map<string, Point[]>();
+    for (const w of this.circuit.wires.values()) {
+      if (scope && !scope.has(w.id)) continue;
+      const poly = wirePolyline(this.circuit, w);
+      if (poly) paths.set(w.id, dropReversals(poly));
+    }
+    const { moved } = spreadOverlaps(paths, (a, b) => {
+      const na = netOf(a);
+      return na !== undefined && na === netOf(b);
+    });
+    if (moved.size === 0) return 0;
+    this.noteEdit();
+    for (const [id, path] of moved) {
+      const wire = this.circuit.wires.get(id);
+      if (!wire) continue;
+      const mid = interiorWaypoints(path);
+      if (mid.length > 0) wire.waypoints = mid;
+      else delete wire.waypoints;
+      wire.manual = true;
+    }
+    return moved.size;
+  }
+
+  /** Esc during a wire drag: put the wire back as it was grabbed. Returns true when a drag was cancelled. */
+  cancelWireDrag(): boolean {
+    const drag = this.dragWire;
+    if (!drag) return false;
+    const wire = this.circuit.wires.get(drag.wireId);
+    if (wire) {
+      if (drag.restore.waypoints) wire.waypoints = drag.restore.waypoints;
+      else delete wire.waypoints;
+      if (drag.restore.manual) wire.manual = true;
+      else delete wire.manual;
+    }
+    this.dragWire = null;
+    this.wireGuide = null;
+    this.dragging = false;
+    return true;
   }
 
   /**
@@ -937,7 +1068,7 @@ export class Editor {
   tidyAllWires(checkpoint = true): number {
     const prevSel = new Set(this.selectedWireIds);
     const prevComp = new Set(this.selectedIds);
-    this.selectedWireIds = new Set(this.circuit.wires.keys());
+    this.selectedWireIds = new Set([...this.circuit.wires.values()].filter((w) => !w.manual).map((w) => w.id));
     this.selectedIds.clear();
     const n = this.tidySelectedWires(checkpoint, { preserveManual: false });
     this.selectedWireIds = prevSel;
@@ -960,6 +1091,7 @@ export class Editor {
     for (const p of this.circuit.allPins()) pinById.set(p.id, p);
 
     const wireIds = new Set<string>();
+    const explicitIds = new Set(this.selectedWireIds);
     if (this.selectedWireIds.size > 0) {
       for (const id of this.selectedWireIds) wireIds.add(id);
     }
@@ -1075,6 +1207,7 @@ export class Editor {
     };
 
     let n = 0;
+    const keptManualIds = new Set<string>();
     for (let idx = 0; idx < orderedIds.length; idx++) {
       const id = orderedIds[idx]!;
       const reservedLanes: RouteLane[] = [];
@@ -1082,9 +1215,21 @@ export class Editor {
         const lanes = lanesByWireId.get(orderedIds[j]!);
         if (lanes) reservedLanes.push(...lanes);
       }
-      const routed = routeOne(id, otherPaths, reservedLanes, false);
-      if (!routed) continue;
       const w = this.circuit.wires.get(id)!;
+      // A hand-shaped wire survives implicit re-routes while it is still valid;
+      // selecting the wire itself and pressing T hands it back to the router.
+      if (w.manual && !explicitIds.has(id)) {
+        const kept = keepManualWire(this.circuit, w, pinById);
+        if (kept) {
+          keptManualIds.add(id);
+          pathByWireId.set(id, kept);
+          otherPaths.push(kept);
+          continue;
+        }
+      }
+      const routed = routeOne(id, otherPaths, reservedLanes, w.manual === true);
+      if (!routed) continue;
+      delete w.manual;
       const mid = routed.slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
       if (mid.length > 0) w.waypoints = mid;
       else delete w.waypoints;
@@ -1099,6 +1244,7 @@ export class Editor {
     let ripped = 0;
     for (const id of orderedIds) {
       if (ripped >= maxRip) break;
+      if (keptManualIds.has(id)) continue;
       const w = this.circuit.wires.get(id);
       const path = pathByWireId.get(id);
       const a = w && pinById.get(w.a);
@@ -1613,36 +1759,44 @@ export class Editor {
   }
 
   /**
-   * Add a wire: manual bends are kept as-is; pin→pin with no bends bakes a
-   * simple L/Z (`orthoCorners` + lane) so the wire owns its shape.
-   * Channel tidy remains available via T / tidySelectedWires.
+   * Orthogonal path for the wire being drawn, shared by the rubber-band preview
+   * and the commit so the wire lands exactly where it was shown. Pin→pin without
+   * bends goes through the channel router; with bends each leg is routed between
+   * the clicked points. `free` is the cursor when no end pin is hovered.
    */
+  routeNewWire(startPinId: string, bends: Point[], endPinId: string | null, free: Point): Point[] | null {
+    const pinById = new Map(this.circuit.allPins().map((p) => [p.id, p]));
+    const a = pinById.get(startPinId);
+    const b = endPinId ? pinById.get(endPinId) : undefined;
+    if (!a) return null;
+    const exclude = new Set([a.componentId]);
+    if (b) exclude.add(b.componentId);
+    const frozen: Point[][] = [];
+    for (const w of this.circuit.wires.values()) {
+      const poly = rawWirePolyline(this.circuit, w);
+      if (poly) frozen.push(routeWirePoints(poly));
+    }
+    const end = b?.pos ?? free;
+    const opts: RouteOpts = {
+      obstacles: routingObstacles(this.circuit, exclude),
+      startDir: pinRouteDir(a.pos, this.circuit.components.get(a.componentId)),
+      endDir: b ? pinRouteDir(b.pos, this.circuit.components.get(b.componentId)) : null,
+      avoidCrossings: frozen,
+    };
+    if (b && bends.length === 0) {
+      opts.hostObstacles = hostBodyObstacles(this.circuit, exclude);
+      opts.avoidOverlap = excludePathsSharingEndpoint(frozen, a.pos, b.pos);
+      opts.router = 'channel';
+    }
+    return routeWirePoints([a.pos, ...bends, end], opts);
+  }
+
+  /** Add a wire along `routeNewWire`; wires with hand-placed bends are marked manual. */
   private commitRoutedWire(aId: string, bId: string, manualWaypoints: Point[]): void {
-    if (manualWaypoints.length > 0) {
-      this.circuit.addWire(aId, bId, manualWaypoints.map((q) => ({ x: q.x, y: q.y })));
-      return;
-    }
-    const pinById = new Map<string, Pin>();
-    for (const pin of this.circuit.allPins()) pinById.set(pin.id, pin);
-    const a = pinById.get(aId);
-    const b = pinById.get(bId);
-    if (!a || !b) {
-      this.circuit.addWire(aId, bId);
-      return;
-    }
-    const aComp = this.circuit.components.get(a.componentId);
-    const bComp = this.circuit.components.get(b.componentId);
-    const lane = wireLaneOf(this.circuit, aId);
-    const corners = orthoCorners(
-      a.pos,
-      b.pos,
-      pinRouteDir(a.pos, aComp),
-      pinRouteDir(b.pos, bComp),
-      lane,
-    );
-    const mid = interiorWaypoints([a.pos, ...corners, b.pos]);
+    const path = this.routeNewWire(aId, manualWaypoints, bId, { x: 0, y: 0 });
+    const mid = path ? interiorWaypoints(path) : [];
     const w = this.circuit.addWire(aId, bId, mid.length ? mid : undefined);
-    cleanupStoredWaypoints(this.circuit, w);
+    if (manualWaypoints.length > 0) w.manual = true;
   }
 
   /** Split wire at a stored waypoint index → junction pin (replaces that bend). */
@@ -1663,8 +1817,11 @@ export class Editor {
     const right = w.waypoints.slice(index + 1);
     const bundleId = w.bundleId;
     this.circuit.removeWire(w.id);
-    this.circuit.addWire(w.a, j.pins.net.id, left.length ? left : undefined, bundleId);
-    this.circuit.addWire(j.pins.net.id, w.b, right.length ? right : undefined, bundleId);
+    const halves = [
+      this.circuit.addWire(w.a, j.pins.net.id, left.length ? left : undefined, bundleId),
+      this.circuit.addWire(j.pins.net.id, w.b, right.length ? right : undefined, bundleId),
+    ];
+    if (w.manual) for (const half of halves) half.manual = true;
     return j.pins.net;
   }
 
@@ -1698,8 +1855,11 @@ export class Editor {
     const j = makeJunction(this.circuit, jPos);
     const bundleId = w.bundleId;
     this.circuit.removeWire(w.id);
-    this.circuit.addWire(w.a, j.pins.net.id, leftMid.length ? leftMid : undefined, bundleId);
-    this.circuit.addWire(j.pins.net.id, w.b, rightMid.length ? rightMid : undefined, bundleId);
+    const halves = [
+      this.circuit.addWire(w.a, j.pins.net.id, leftMid.length ? leftMid : undefined, bundleId),
+      this.circuit.addWire(j.pins.net.id, w.b, rightMid.length ? rightMid : undefined, bundleId),
+    ];
+    if (w.manual) for (const half of halves) half.manual = true;
     return j.pins.net;
   }
 
@@ -2193,6 +2353,22 @@ function cleanupStoredWaypoints(circuit: Circuit, wire: Wire): void {
 }
 
 type ChannelRouteOpts = RouteOpts;
+
+/** Drawn path of a hand-shaped wire if it is still orthogonal and clear of foreign bodies. */
+function keepManualWire(circuit: Circuit, wire: Wire, pinById: Map<string, Pin>): Point[] | null {
+  const a = pinById.get(wire.a);
+  const b = pinById.get(wire.b);
+  if (!a || !b || !wire.waypoints?.length) return null;
+  const path = simplifyOrthoPath([a.pos, ...wire.waypoints.map((p) => ({ x: p.x, y: p.y })), b.pos]);
+  for (let i = 0; i < path.length - 1; i++) {
+    const p = path[i]!;
+    const q = path[i + 1]!;
+    if (Math.abs(p.x - q.x) > 0.5 && Math.abs(p.y - q.y) > 0.5) return null;
+  }
+  const exclude = new Set([a.componentId, b.componentId]);
+  if (pathHitsObstacles(path, routingObstacles(circuit, exclude))) return null;
+  return path;
+}
 
 /**
  * Keep user/drag ortho waypoints on tidy when the path is still orthogonal,

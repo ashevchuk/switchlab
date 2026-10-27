@@ -2635,6 +2635,13 @@ function openCanvasContextMenu(ev: MouseEvent): void {
     );
   }
   items.push({
+    label: 'Separate wires',
+    disabled: editor.circuit.wires.size < 2,
+    run: () => {
+      if (editor.separateWires() > 0) uiDirty = true;
+    },
+  });
+  items.push({
     label: 'Tidy wires',
     kbd: 'T',
     disabled: !hasSel,
@@ -2807,6 +2814,7 @@ canvas.addEventListener('mousedown', (ev) => {
     canvas.style.cursor = 'grabbing';
     return;
   }
+  editor.worldPerPixel = 1 / camera.scale;
   editor.handleMouseDown(worldPoint(ev), { altKey: ev.altKey, shiftKey: ev.shiftKey });
 });
 
@@ -2836,6 +2844,7 @@ canvas.addEventListener('mousemove', (ev) => {
     return;
   }
   const world = worldPoint(ev);
+  editor.worldPerPixel = 1 / camera.scale;
   editor.handleMouseMove(world);
   editor.handleMouseDrag(world); // no-ops internally unless a marquee/waypoint/component drag is actually in progress
   updateCursor();
@@ -2852,6 +2861,7 @@ window.addEventListener('mouseup', (ev) => {
     canvas.style.cursor = CURSOR[editor.tool.kind];
     return;
   }
+  editor.worldPerPixel = 1 / camera.scale;
   editor.handleMouseUp(worldPoint(ev), ev.shiftKey);
   updateCursor();
 });
@@ -2990,7 +3000,9 @@ window.addEventListener('keydown', (ev) => {
     editor.handleDelete();
     uiDirty = true;
   } else if (ev.key === 'Escape') {
-    if (editor.wireStartPinId) {
+    if (editor.cancelWireDrag()) {
+      uiDirty = true;
+    } else if (editor.wireStartPinId) {
       editor.escapeWireStep();
       uiDirty = true;
     } else if (editor.tool.kind !== 'select') {

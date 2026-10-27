@@ -5,3 +5,4 @@ dist-file/
 .claude/
 test-results/
 playwright-report/
+.notes/

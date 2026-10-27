@@ -126,10 +126,7 @@ describe('edit history + clipboard', () => {
     ]);
     ed.selectedWireId = w.id;
     // Simulate releasing a bend on the horizontal return (makes 70,0 colinear).
-    (ed as unknown as { dragWaypoint: { wireId: string; index: number } | null }).dragWaypoint = {
-      wireId: w.id,
-      index: 3,
-    };
+    ed.handleMouseDown({ x: 70, y: 0 });
     ed.handleMouseUp({ x: 70, y: 0 }, false);
     // Colinear 70,0 between 70,30 and pin B is dropped; spur at the pin gone.
     expect(w.waypoints?.some((p) => Math.abs(p.y) < 0.5 && Math.abs(p.x - 70) < 0.5)).toBeFalsy();

@@ -125,5 +125,14 @@ On drag: re-route only affected segments; keep explicit waypoints.
 - [x] Drop-in behind `routeWirePoints` for tidy/commit/ribbon (`router: 'channel'`)
 - [x] Perf: &lt; 2 ms/route stand microbench
 
-Rubber-band draw still uses the pattern catalog on purpose (keeps drag cheap).
-Next: waypoint preservation, then optionally channel for rubber-band too.
+Drawing: pin→pin without bends uses the channel router both for the rubber-band
+preview and for the commit (`Editor.routeNewWire`), so the committed wire is the
+path that was shown. With bends, each leg is pattern-routed between the clicked
+points and the result is stored as corners. A free (non-pin) cursor end stays on
+the pattern catalog.
+
+Manual editing: `src/ui/wireEdit.ts` slides a leg or moves a corner on the drawn
+orthogonal path, splitting the pin-adjacent legs into a short pin stub plus a
+movable vertex so the pin exit direction survives. Edited wires get
+`Wire.manual`; implicit tidies keep them while the stored path is orthogonal and
+clear of foreign bodies, explicit tidy of the wire clears the flag.

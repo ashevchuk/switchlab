@@ -470,6 +470,8 @@ export interface Wire {
   waypoints?: Point[];
   /** Cosmetic bus-bundle tag from ribbon wiring; ignored electrically. */
   bundleId?: string;
+  /** Route was shaped by hand; implicit re-routes (nudge, rotate, drag) leave it alone. */
+  manual?: boolean;
 }
 
 /** Result of net resolution: every pin id maps to the net id it belongs to. */

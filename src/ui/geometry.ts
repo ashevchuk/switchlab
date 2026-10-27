@@ -1304,10 +1304,16 @@ export function findWaypointNear(circuit: Circuit, p: Point, radius = 8): { wire
  * orthogonal path, but `insertIndex` indexes the stored waypoint list
  * (segment i of pin→waypoints→pin), so a drag still inserts a real bend.
  */
-export function findWireNear(circuit: Circuit, p: Point, radius = 6): { wireId: string; insertIndex: number } | undefined {
+export function findWireNear(
+  circuit: Circuit,
+  p: Point,
+  radius = 6,
+  only?: ReadonlySet<string>,
+): { wireId: string; insertIndex: number } | undefined {
   let best: { wireId: string; insertIndex: number } | undefined;
   let bestDist = radius;
   for (const w of circuit.wires.values()) {
+    if (only && !only.has(w.id)) continue;
     const raw = rawWirePolyline(circuit, w);
     if (!raw) continue;
     for (let i = 0; i < raw.length - 1; i++) {
