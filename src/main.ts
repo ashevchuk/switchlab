@@ -383,6 +383,7 @@ editor.onBeforeEdit = () => {
   bumpDefRevisionOnEdit();
   autosave.schedule();
 };
+editor.onCancelEdit = () => editHistory.discardLast(editor.circuit);
 objectInspector.onBeforeEdit = () => {
   editHistory.checkpoint(editor.circuit);
   bumpDefRevisionOnEdit();

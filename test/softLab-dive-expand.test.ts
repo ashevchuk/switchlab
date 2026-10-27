@@ -243,7 +243,7 @@ describe('syncSoftExpandForDivePath', () => {
       // COUNTER soft + BCD expanded ≈ 200+ nets (not full 494).
       expect(nets.pinsOf.size).toBeGreaterThan(100);
       expect(nets.pinsOf.size).toBeLessThan(400);
-      let state = initialState(nets);
+      let state = initialState();
       for (let i = 0; i < 8; i++) state = step(flat, nets, state);
       const bcd = [...circuit.components.values()].find(
         (c): c is Extract<Component, { kind: 'chip' }> =>

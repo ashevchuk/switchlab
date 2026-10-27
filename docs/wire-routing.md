@@ -137,6 +137,12 @@ movable vertex so the pin exit direction survives. Edited wires get
 `Wire.manual`; implicit tidies keep them while the stored path is orthogonal and
 clear of foreign bodies, explicit tidy of the wire clears the flag.
 
+When several wires are selected and one leg is dragged, every other selected wire with
+a parallel leg that overlaps it in extent (within six grid steps) is shifted by the
+same distance. Those wires are left out of the snap targets so the dragged leg does not
+snap against its own companions, and Esc restores all of them. The drag takes one undo
+checkpoint, which Esc takes back.
+
 ## Pin exit direction
 
 `pinRouteDir` derives the direction a wire leaves a pin. Chips, RAM and ROM have pins
@@ -151,5 +157,3 @@ passed through `cleanRoute`: doubling back on a line is dropped and a jog shorte
 half a grid between parallel legs is collapsed, only when the result stays clear of
 bodies and does not run along other wires more than before. Pins off the grid leave
 slanted legs in the channel router's output, which is what produced those jogs.
-`lab-mini-cpu` places COUNTER4 inside SOFT_RAM16; the two body hits that remain there come
-from the layout, not from the router.

@@ -95,6 +95,7 @@ export type Tool =
   | { kind: 'place-chip'; defId: string }; // place an instance of an existing ChipDef
 
 const SNAP_REACH_PX = 6; // screen px within which a wire part is pulled onto a gap or pin line
+const BUNDLE_REACH = GRID * 6; // how far apart parallel legs of selected wires may lie and still travel together
 const DRAG_THRESHOLD = 4; // px of mouse movement before a mousedown becomes a drag, not a click
 
 /**
@@ -137,6 +138,8 @@ export class Editor {
   hoveredWireId: string | null = null;
   /** Set by main.ts — push undo checkpoint before mutating edits. */
   onBeforeEdit: (() => void) | null = null;
+  /** Set by main.ts — take back the checkpoint of an edit that was cancelled (Esc mid-drag). */
+  onCancelEdit: (() => void) | null = null;
   /** Fired after components are removed (Delete / context menu), with their ids. */
   onComponentsRemoved: ((ids: string[]) => void) | null = null;
   /** In-canvas tutorial highlight target (Renderer + Place menu). */
@@ -159,6 +162,8 @@ export class Editor {
     axis: Axis;
     targets: Record<Axis, SnapTarget[]>;
     restore: { waypoints?: Point[]; manual?: boolean };
+    /** Other selected wires with a leg parallel to the grabbed one; they travel by the same distance. */
+    companions: WireCompanion[];
   } | null = null;
   /** Wire part under the pointer in the select tool, for cursor and highlight; a segment carries its leg. */
   wireGrip:
@@ -169,6 +174,8 @@ export class Editor {
   worldPerPixel = 1;
   /** Alignment line shown while a dragged wire part is pulled onto a body, wire or pin gap. */
   wireGuide: { axis: Axis; value: number } | null = null;
+  /** What the guide is aligned to, so the renderer can colour it. */
+  wireGuideKind: SnapTarget['kind'] | null = null;
   /** Mousedown landed on a wire segment (not an existing bend point) — becomes a segment drag only past DRAG_THRESHOLD, so a plain click just selects the wire. */
   private pendingWireGrab: { wireId: string; downPoint: Point } | null = null;
   /** Mousedown landed on a component — becomes an actual move only past DRAG_THRESHOLD, so a plain click still just (multi-)selects/toggles it. */
@@ -388,7 +395,7 @@ export class Editor {
 
     if (grab) {
       this.pendingWireGrab = { wireId: grab.wireId, downPoint: p };
-      this.selectedWireId = grab.wireId;
+      if (!this.selectedWireIds.has(grab.wireId)) this.selectedWireId = grab.wireId;
       this.selectedIds.clear();
       this.highlightNetOfWire(grab.wireId);
       return;
@@ -554,9 +561,11 @@ export class Editor {
       axis = Math.abs(a.x - b.x) < 0.5 ? 'x' : 'y';
       offset = axis === 'x' ? { x: a.x - grab.x, y: 0 } : { x: 0, y: a.y - grab.y };
     }
+    const companions = kind === 'segment' ? this.findWireCompanions(wireId, base, index, axis) : [];
+    const companionIds = new Set(companions.map((c) => c.wireId));
     const others: Point[][] = [];
     for (const ow of this.circuit.wires.values()) {
-      if (ow.id === wireId) continue;
+      if (ow.id === wireId || companionIds.has(ow.id)) continue;
       const poly = wirePolyline(this.circuit, ow);
       if (poly) others.push(poly);
     }
@@ -575,7 +584,46 @@ export class Editor {
         y: laneTargets('y', obstacles, others, pins),
       },
       restore: { waypoints: wire.waypoints?.map((p) => ({ ...p })), manual: wire.manual },
+      companions,
     };
+  }
+
+  /** Legs of the other selected wires that run alongside leg `index` of `base` and overlap it in extent. */
+  private findWireCompanions(wireId: string, base: Point[], index: number, axis: Axis): WireCompanion[] {
+    if (!this.selectedWireIds.has(wireId)) return [];
+    const along: Axis = axis === 'x' ? 'y' : 'x';
+    const grabbed = base[index]!;
+    const grabbedEnd = base[index + 1]!;
+    const lo = Math.min(grabbed[along], grabbedEnd[along]);
+    const hi = Math.max(grabbed[along], grabbedEnd[along]);
+    const out: WireCompanion[] = [];
+    for (const id of this.selectedWireIds) {
+      const wire = this.circuit.wires.get(id);
+      const drawn = id !== wireId && wire && wirePolyline(this.circuit, wire);
+      if (!wire || !drawn) continue;
+      const path = dropReversals(drawn);
+      let best = -1;
+      let bestGap = BUNDLE_REACH;
+      for (let i = 0; i < path.length - 1; i++) {
+        const a = path[i]!;
+        const b = path[i + 1]!;
+        if (Math.abs(a[axis] - b[axis]) >= 0.5) continue;
+        if (Math.min(hi, Math.max(a[along], b[along])) - Math.max(lo, Math.min(a[along], b[along])) <= 0) continue;
+        const gap = Math.abs(a[axis] - grabbed[axis]);
+        if (gap <= bestGap) {
+          best = i;
+          bestGap = gap;
+        }
+      }
+      if (best < 0) continue;
+      out.push({
+        wireId: id,
+        base: path,
+        index: best,
+        restore: { waypoints: wire.waypoints?.map((p) => ({ ...p })), manual: wire.manual },
+      });
+    }
+    return out;
   }
 
   /** Re-shape the dragged wire from its grab-time path so the cursor never accumulates error. */
@@ -586,9 +634,13 @@ export class Editor {
     const tolerance = SNAP_REACH_PX * this.worldPerPixel;
     const gridStep = this.snapMode === 'grid' ? GRID : this.snapMode === 'half' ? GRID / 2 : null;
     this.wireGuide = null;
+    this.wireGuideKind = null;
     const settle = (value: number, axis: Axis): number => {
       const r = snapLane(value, drag.targets[axis], tolerance, gridStep);
-      if (r.target && r.target.kind !== 'grid') this.wireGuide = { axis, value: r.value };
+      if (r.target && r.target.kind !== 'grid') {
+        this.wireGuide = { axis, value: r.value };
+        this.wireGuideKind = r.target.kind;
+      }
       return r.value;
     };
     let path: Point[];
@@ -606,10 +658,22 @@ export class Editor {
         drag.axis === 'x' ? { x: value, y: pointer.y } : { x: pointer.x, y: value },
         drag.grab,
       );
+      const shift = value - drag.base[drag.index]![drag.axis];
+      for (const c of drag.companions) {
+        const companion = this.circuit.wires.get(c.wireId);
+        if (!companion) continue;
+        const to = c.base[c.index]![drag.axis] + shift;
+        const moved = dragSegment(
+          c.base,
+          c.index,
+          drag.axis === 'x' ? { x: to, y: pointer.y } : { x: pointer.x, y: to },
+          drag.grab,
+        );
+        setWaypoints(companion, interiorWaypoints(moved));
+        companion.manual = true;
+      }
     }
-    const mid = interiorWaypoints(path);
-    if (mid.length > 0) wire.waypoints = mid;
-    else delete wire.waypoints;
+    setWaypoints(wire, interiorWaypoints(path));
     wire.manual = true;
   }
 
@@ -652,16 +716,25 @@ export class Editor {
   cancelWireDrag(): boolean {
     const drag = this.dragWire;
     if (!drag) return false;
-    const wire = this.circuit.wires.get(drag.wireId);
-    if (wire) {
-      if (drag.restore.waypoints) wire.waypoints = drag.restore.waypoints;
+    const dragged = [
+      { wireId: drag.wireId, restore: drag.restore },
+      ...drag.companions,
+    ];
+    for (const { wireId, restore } of dragged) {
+      const wire = this.circuit.wires.get(wireId);
+      if (!wire) continue;
+      if (restore.waypoints) wire.waypoints = restore.waypoints;
       else delete wire.waypoints;
-      if (drag.restore.manual) wire.manual = true;
+      if (restore.manual) wire.manual = true;
       else delete wire.manual;
     }
     this.dragWire = null;
     this.wireGuide = null;
     this.dragging = false;
+    if (this.dragCheckpointTaken) {
+      this.dragCheckpointTaken = false;
+      this.onCancelEdit?.();
+    }
     return true;
   }
 
@@ -2403,6 +2476,18 @@ function cleanupStoredWaypoints(circuit: Circuit, wire: Wire): void {
 }
 
 type ChannelRouteOpts = RouteOpts;
+
+interface WireCompanion {
+  wireId: string;
+  base: Point[];
+  index: number;
+  restore: { waypoints?: Point[]; manual?: boolean };
+}
+
+function setWaypoints(wire: Wire, waypoints: Point[]): void {
+  if (waypoints.length > 0) wire.waypoints = waypoints;
+  else delete wire.waypoints;
+}
 
 /** Drawn path of a hand-shaped wire if it is still orthogonal and clear of foreign bodies. */
 function keepManualWire(circuit: Circuit, wire: Wire, pinById: Map<string, Pin>): Point[] | null {

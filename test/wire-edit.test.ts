@@ -4,9 +4,9 @@ import type { Point } from '../src/sim/types.js';
 import { deserializeProject } from '../src/sim/serialize.js';
 import { ChipLibrary } from '../src/sim/ChipLibrary.js';
 import { Circuit } from '../src/sim/Circuit.js';
-import { makeLed, makeTransistor } from '../src/sim/library.js';
+import { makeInput, makeLed, makeTransistor } from '../src/sim/library.js';
 import { Editor } from '../src/ui/Editor.js';
-import { findComponentNear, pathHitsObstacles, routingObstacles, wirePolyline } from '../src/ui/geometry.js';
+import { findComponentNear, pathHitsObstacles, pathOverlapLength, routingObstacles, wirePolyline } from '../src/ui/geometry.js';
 import { cleanRoute, dragCorner, dragSegment } from '../src/ui/wireEdit.js';
 
 function isOrtho(path: Point[]): boolean {
@@ -419,5 +419,108 @@ describe('wire grip feedback', () => {
     expect(editor.wireGrip).toMatchObject({ kind: 'corner' });
     editor.handleMouseMove({ x: 500, y: 500 });
     expect(editor.wireGrip).toBeNull();
+  });
+});
+
+describe('auto routes around hand-shaped wires', () => {
+  it('does not lay an auto wire along a manual wire that is re-tidied with it', () => {
+    const circuit = new Circuit();
+    const editor = new Editor(circuit, new ChipLibrary());
+    const srcA = makeInput(circuit, 0, { x: 0, y: 0 });
+    const srcM = makeInput(circuit, 0, { x: 0, y: 200 });
+    const ledA = makeLed(circuit, { x: 400, y: 120 });
+    const ledM = makeLed(circuit, { x: 400, y: 200 });
+    const auto = circuit.addWire(srcA.pins.out.id, ledA.pins.in.id);
+    const rowM = srcM.pins.out.pos.y;
+    // Runs up the column the auto wire would pick for itself (x = 200 between its pins).
+    const manual = circuit.addWire(srcM.pins.out.id, ledM.pins.in.id, [
+      { x: 200, y: rowM },
+      { x: 200, y: 40 },
+      { x: 320, y: 40 },
+      { x: 320, y: rowM },
+    ]);
+    manual.manual = true;
+    editor.selectedIds = new Set([srcA.id, srcM.id]);
+    editor.tidySelectedWires(false);
+    expect(manual.manual).toBe(true);
+    const autoPath = wirePolyline(circuit, auto)!;
+    const manualPath = wirePolyline(circuit, manual)!;
+    expect(pathOverlapLength(autoPath, [manualPath])).toBe(0);
+  });
+});
+
+describe('cancelling a wire drag', () => {
+  it('takes back the undo checkpoint the drag had pushed', () => {
+    const circuit = new Circuit();
+    const editor = new Editor(circuit, new ChipLibrary());
+    const t = makeTransistor(circuit, 'N', { x: 0, y: 0 });
+    const led = makeLed(circuit, { x: 200, y: -120 });
+    const y = t.pins.drain.pos.y;
+    circuit.addWire(t.pins.drain.id, led.pins.in.id, [
+      { x: 40, y },
+      { x: 40, y: -120 },
+    ]);
+    let checkpoints = 0;
+    editor.onBeforeEdit = () => checkpoints++;
+    editor.onCancelEdit = () => checkpoints--;
+    editor.handleMouseDown({ x: 40, y: -50 });
+    editor.handleMouseDrag({ x: 80, y: -50 });
+    expect(checkpoints).toBe(1);
+    expect(editor.cancelWireDrag()).toBe(true);
+    expect(checkpoints).toBe(0);
+  });
+});
+
+describe('dragging one leg of several selected wires', () => {
+  function bundle() {
+    const circuit = new Circuit();
+    const editor = new Editor(circuit, new ChipLibrary());
+    const srcA = makeInput(circuit, 0, { x: 0, y: 0 });
+    const srcB = makeInput(circuit, 0, { x: 0, y: 40 });
+    const ledA = makeLed(circuit, { x: 400, y: 160 });
+    const ledB = makeLed(circuit, { x: 400, y: 200 });
+    const run = (src: typeof srcA, led: typeof ledA, x: number) =>
+      circuit.addWire(src.pins.out.id, led.pins.in.id, [
+        { x, y: src.pins.out.pos.y },
+        { x, y: led.pins.in.pos.y },
+      ]);
+    const a = run(srcA, ledA, 200);
+    const b = run(srcB, ledB, 240);
+    editor.selectedWireIds = new Set([a.id, b.id]);
+    const columnOf = (wire: typeof a) => {
+      const path = wirePolyline(circuit, wire)!;
+      return path.find((p, i) => i > 0 && i < path.length - 1)!.x;
+    };
+    return { editor, a, b, columnOf };
+  }
+
+  it('carries the parallel legs of the other selected wires by the same distance', () => {
+    const { editor, a, b, columnOf } = bundle();
+    editor.handleMouseDown({ x: 200, y: 100 });
+    editor.handleMouseDrag({ x: 280, y: 100 });
+    editor.handleMouseUp({ x: 280, y: 100 }, false);
+    expect(columnOf(a)).toBe(280);
+    expect(columnOf(b)).toBe(320);
+    expect(a.manual).toBe(true);
+    expect(b.manual).toBe(true);
+  });
+
+  it('puts every wire back when the drag is cancelled', () => {
+    const { editor, a, b, columnOf } = bundle();
+    editor.handleMouseDown({ x: 200, y: 100 });
+    editor.handleMouseDrag({ x: 280, y: 100 });
+    editor.cancelWireDrag();
+    expect(columnOf(a)).toBe(200);
+    expect(columnOf(b)).toBe(240);
+    expect(b.manual).toBeUndefined();
+  });
+
+  it('leaves unselected wires where they are', () => {
+    const { editor, b, columnOf } = bundle();
+    editor.selectedWireIds = new Set([[...editor.selectedWireIds][0]!]);
+    editor.handleMouseDown({ x: 200, y: 100 });
+    editor.handleMouseDrag({ x: 280, y: 100 });
+    editor.handleMouseUp({ x: 280, y: 100 }, false);
+    expect(columnOf(b)).toBe(240);
   });
 });

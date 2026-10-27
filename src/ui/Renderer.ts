@@ -7,7 +7,14 @@ import { softLabShowsBadge } from '../sim/softLab.js';
 import type { Component, Level, Pin, Point, Wire } from '../sim/types.js';
 import type { Camera } from './Camera.js';
 import type { Editor } from './Editor.js';
+import type { SnapTarget } from './laneSnap.js';
 import { GRID, BUS_SWITCH_BODY_W, busPassPaddleCenter, busSwitchPaddleCenter, busSwitchSideUnit, findSameNetTees, isBusName, pinExitDir, pinRouteDir, rawWirePolyline, routeWirePoints, routingObstacles } from './geometry.js';
+
+const GUIDE_COLOR: Partial<Record<SnapTarget['kind'], 'strokeN' | 'strokeP' | 'hover'>> = {
+  body: 'strokeN',
+  wire: 'strokeP',
+  pin: 'hover',
+};
 
 const COLOR = {
   bg: '#12141a',
@@ -328,7 +335,7 @@ export function draw(
   const guide = editor.wireGuide;
   if (guide) {
     ctx.save();
-    ctx.strokeStyle = COLOR.hover;
+    ctx.strokeStyle = COLOR[(editor.wireGuideKind && GUIDE_COLOR[editor.wireGuideKind]) || 'hover'];
     ctx.lineWidth = 1 / camera.scale;
     ctx.setLineDash([4 / camera.scale, 4 / camera.scale]);
     ctx.beginPath();

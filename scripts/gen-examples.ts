@@ -567,7 +567,7 @@ function labMiniCpu(): void {
   const library = emptyLib();
   const c = new Circuit();
   const pc = makeChipInstance(c, library.findByName('COUNTER4')!, { x: 280, y: 80 });
-  const ram = makeChipInstance(c, library.findByName('SOFT_RAM16')!, { x: 280, y: 280 });
+  const ram = makeChipInstance(c, library.findByName('SOFT_RAM16')!, { x: 280, y: 340 });
   const alu = makeChipInstance(c, library.findByName('ALU4')!, { x: 560, y: 200 });
   const acc = makeChipInstance(c, library.findByName('REG8')!, { x: 820, y: 200 });
   const clk = makeClock(c, { x: 60, y: 80 }, 16);

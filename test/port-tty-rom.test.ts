@@ -47,7 +47,7 @@ describe('Port TTY ROM', () => {
     const cpu = buildZ80Cpu(circuit, library, 12, prog, { x: 0, y: 0 });
     let flat = flatten(circuit, library);
     let netMap = flat.computeNets();
-    let state = initialState(flat, netMap);
+    let state = initialState();
     const runner = new MachineRunner();
     runner.attach(
       circuit,

@@ -6,7 +6,7 @@ import { flatten } from '../src/sim/hierarchy.js';
 import { makeChipInstance, makeInput, wire } from '../src/sim/library.js';
 import { initialState, step } from '../src/sim/solver.js';
 import { pruneDuplicateChipNames, seedStandardCells } from '../src/sim/stdcells.js';
-import type { Level, NetMap, SimState } from '../src/sim/types.js';
+import type { ChipInstanceComponent, Level, NetMap, SimState } from '../src/sim/types.js';
 
 function tick(circuit: Circuit, netMap: NetMap, state: SimState, n = 10): SimState {
   for (let i = 0; i < n; i++) state = step(circuit, netMap, state);
@@ -53,7 +53,7 @@ describe('seedStandardCells — placed chip instances behave like the raw gates 
     const mux = getDef(library, 'MUX2');
     const andId = getDef(library, 'AND').id;
     const andInsts = [...mux.circuit.components.values()].filter(
-      (c) => c.kind === 'chip' && c.defId === andId,
+      (c): c is ChipInstanceComponent => c.kind === 'chip' && c.defId === andId,
     );
     expect(andInsts.length).toBe(2);
     for (const c of andInsts) {

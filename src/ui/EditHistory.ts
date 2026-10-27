@@ -43,6 +43,11 @@ export class EditHistory {
     s.redo = [];
   }
 
+  /** Forget the newest checkpoint, for an edit cancelled before it changed anything. */
+  discardLast(circuit: Circuit): void {
+    this.stacks(circuit).undo.pop();
+  }
+
   canUndo(circuit: Circuit): boolean {
     return this.stacks(circuit).undo.length > 0;
   }

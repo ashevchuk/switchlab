@@ -56,7 +56,7 @@ describe('Soft Lab → Gates POR', () => {
       {
         const flat = flatten(circuit, library);
         const nets = flat.computeNets();
-        let state = initialState(nets);
+        let state = initialState();
         for (let i = 0; i < 4; i++) state = step(flat, nets, state);
         expect(pinLevel(nets, state, ctr.pins.q0!.id)).toBe(0);
       }
@@ -68,7 +68,7 @@ describe('Soft Lab → Gates POR', () => {
         const flat = flatten(circuit, library);
         const nets = flat.computeNets();
         expect(nets.pinsOf.size).toBeGreaterThan(100);
-        let state = initialState(nets);
+        let state = initialState();
         for (let i = 0; i < 10; i++) state = step(flat, nets, state);
         expect(pinLevel(nets, state, ctr.pins.q0!.id)).toBe(0);
         expect(pinLevel(nets, state, ctr.pins.q1!.id)).toBe(0);
@@ -109,7 +109,7 @@ describe('Soft Lab → Gates POR', () => {
       // Deliberately skip armSoftLabToGatesPor — regression guard for the Z bug.
       const flat = flatten(circuit, library);
       const nets = flat.computeNets();
-      let state = initialState(nets);
+      let state = initialState();
       for (let i = 0; i < 10; i++) state = step(flat, nets, state);
       expect(pinLevel(nets, state, ctr.pins.q0!.id)).toBe('Z');
     } finally {
@@ -140,7 +140,7 @@ describe('Soft Lab → Gates POR', () => {
 
       const flat = flatten(circuit, library);
       const nets = flat.computeNets();
-      let state = initialState(nets);
+      let state = initialState();
       for (let i = 0; i < 10; i++) state = step(flat, nets, state);
       expect(pinLevel(nets, state, ctr.pins.q0!.id)).toBe(0);
       expect(pinLevel(nets, state, ctr.pins.q3!.id)).toBe(0);
