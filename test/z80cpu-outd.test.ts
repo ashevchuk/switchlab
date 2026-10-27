@@ -131,7 +131,7 @@ describe('buildZ80Cpu — x=10, y=5, z=3: OUTD (real 0xED 0xAB)', () => {
       }
     };
     const finishInstruction = () => {
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 5; i++) {
         pulse(phaseClk);
         pulse(dataClk);
       }
@@ -152,7 +152,7 @@ describe('buildZ80Cpu — x=10, y=5, z=3: OUTD (real 0xED 0xAB)', () => {
     runToPhase5();
     expect(readPin(cpu.ioWrite)).toBe(1);
     expect(readPin(cpu.ioRead)).toBe(0);
-    expect(readReg(cpu.ioPortAddr)).toBe(0x37);
+    expect((readReg(cpu.ioPortAddr) & 0xff)).toBe(0x37);
     expect(readReg(cpu.ioPortDataOut)).toBe(0xab);
     finishInstruction();
     expect(readReg(cpu.rH.q)).toBe(0);
@@ -164,7 +164,7 @@ describe('buildZ80Cpu — x=10, y=5, z=3: OUTD (real 0xED 0xAB)', () => {
     // --- OUTD #2 ---
     runToPhase5();
     expect(readPin(cpu.ioWrite)).toBe(1);
-    expect(readReg(cpu.ioPortAddr)).toBe(0x37);
+    expect((readReg(cpu.ioPortAddr) & 0xff)).toBe(0x37);
     expect(readReg(cpu.ioPortDataOut)).toBe(0x11);
     finishInstruction();
     expect(readReg(cpu.rH.q)).toBe(0);

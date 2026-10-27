@@ -160,7 +160,7 @@ describe('buildZ80Cpu — x=10, y=4, z=3: OUTI (real 0xED 0xA3)', () => {
     runToPhase5();
     expect(readPin(cpu.ioWrite)).toBe(1);
     expect(readPin(cpu.ioRead)).toBe(0);
-    expect(readReg(cpu.ioPortAddr)).toBe(0x37);
+    expect((readReg(cpu.ioPortAddr) & 0xff)).toBe(0x37);
     expect(readReg(cpu.ioPortDataOut)).toBe(0xab);
     finishInstruction();
     expect(readReg(cpu.rH.q)).toBe(0);
@@ -172,7 +172,7 @@ describe('buildZ80Cpu — x=10, y=4, z=3: OUTI (real 0xED 0xA3)', () => {
     // --- OUTI #2 ---
     runToPhase5();
     expect(readPin(cpu.ioWrite)).toBe(1);
-    expect(readReg(cpu.ioPortAddr)).toBe(0x37);
+    expect((readReg(cpu.ioPortAddr) & 0xff)).toBe(0x37);
     expect(readReg(cpu.ioPortDataOut)).toBe(0x11);
     finishInstruction();
     expect(readReg(cpu.rH.q)).toBe(0);

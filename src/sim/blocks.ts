@@ -5997,13 +5997,25 @@ function buildZ80CpuInner(
   tieToLabel('EDNN_LOAD_NOW', edNnLoadNow.out, { x: pos.x - 800, y: pos.y - 6030 });
 
   // Store/load × low/high phase enables (AND with data phases).
+  // The store strobes also wait for RAM's `oe` to be low: RAM drives the bus
+  // for the high-immediate read one phase earlier, and `oe` falls through a
+  // chain far deeper than these strobes rise, so without the wait a register
+  // and RAM drive different values onto the bus.
+  const ramOeIdle = buildNot(parent, { x: pos.x - 780, y: pos.y - 5935 });
+  wire(parent, ram.pins.oe!, ramOeIdle.in);
+  const edNnWriteLowPhase = buildAnd(parent, { x: pos.x - 760, y: pos.y - 5950 });
+  wire(parent, edNnStoreNow.out, edNnWriteLowPhase.a);
+  wire(parent, edNnDataLowNow.out, edNnWriteLowPhase.b);
   const edNnWriteLowNow = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5950 });
-  wire(parent, edNnStoreNow.out, edNnWriteLowNow.a);
-  wire(parent, edNnDataLowNow.out, edNnWriteLowNow.b);
+  wire(parent, edNnWriteLowPhase.out, edNnWriteLowNow.a);
+  wire(parent, ramOeIdle.out, edNnWriteLowNow.b);
   tieToLabel('EDNN_WRITE_LOW_NOW', edNnWriteLowNow.out, { x: pos.x - 700, y: pos.y - 5950 }); // ram we + bus drivers
+  const edNnWriteHighPhase = buildAnd(parent, { x: pos.x - 760, y: pos.y - 5980 });
+  wire(parent, edNnStoreNow.out, edNnWriteHighPhase.a);
+  wire(parent, edNnDataHighNow.out, edNnWriteHighPhase.b);
   const edNnWriteHighNow = buildAnd(parent, { x: pos.x - 750, y: pos.y - 5980 });
-  wire(parent, edNnStoreNow.out, edNnWriteHighNow.a);
-  wire(parent, edNnDataHighNow.out, edNnWriteHighNow.b);
+  wire(parent, edNnWriteHighPhase.out, edNnWriteHighNow.a);
+  wire(parent, ramOeIdle.out, edNnWriteHighNow.b);
   tieToLabel('EDNN_WRITE_HIGH_NOW', edNnWriteHighNow.out, { x: pos.x - 700, y: pos.y - 5980 });
   const edNnReadLowNow = buildAnd(parent, { x: pos.x - 750, y: pos.y - 6010 });
   wire(parent, edNnLoadNow.out, edNnReadLowNow.a);
@@ -11482,25 +11494,40 @@ function buildZ80CpuInner(
   const rHExt13 = wrapWithPairCommit(rHExt12, 'ADCSBCHL_COMMIT_NOW', 'ADDHLHI', { x: pos.x + 13900, y: pos.y + 700 });
   const rLExt13 = wrapWithPairCommit(rLExt12, 'ADCSBCHL_COMMIT_NOW', 'ADDHLLO', { x: pos.x + 13900, y: pos.y + 1000 });
 
-  // `C`'s own bus-driver bank: real INI/OUTI port address, plus
+  // `C`'s own bus-driver banks: real INI/OUTI port address, plus
   // IN r,(C)/OUT (C),r (see "x=01, z=0/z=1") — all publish C onto the bus
-  // for `ioPortAddr`. Side-fold the two ED register-I/O terms then merge
-  // once, so this chain doesn't grow two sequential stages past INI/OUTI.
+  // for `ioPortAddr`. One bank per enable instead of a merging `OR` chain,
+  // because each family has its own timing against the driver it hands the
+  // bus to or takes it from, measured in gate delays:
+  //  - INI/IND: `INBLOCK_WRITE_NOW` takes the bus three delays after
+  //    `INBLOCK_READ_NOW` falls, so `C` is released straight from that
+  //    label, with no stage in between.
+  //  - OUTI/OUTD: RAM's `oe` (driving the bus in PHASE4) lets go many
+  //    delays after `OUTBLOCK_READ_NOW` falls, and that depth grows with every
+  //    term added to `RAM_OE_OR`, so `C` is enabled only once `oe` is
+  //    actually low.
+  const cBankEnables: ((bufEnable: Pin) => void)[] = [
+    (bufEnable) => tieToLabel('INBLOCK_READ_NOW', bufEnable),
+  ];
+  const ramOeLow = buildNot(parent, { x: pos.x + 13050, y: pos.y - 830 });
+  wire(parent, ram.pins.oe!, ramOeLow.in);
+  const outBlockCToBus = buildAnd(parent, { x: pos.x + 13070, y: pos.y - 830 });
+  tieToLabel('OUTBLOCK_WRITE_NOW', outBlockCToBus.a, { x: pos.x + 12950, y: pos.y - 830 });
+  wire(parent, ramOeLow.out, outBlockCToBus.b);
+  cBankEnables.push((bufEnable) => wire(parent, outBlockCToBus.out, bufEnable));
   const blockCToBusEd = buildOr(parent, { x: pos.x + 13050, y: pos.y - 870 });
   tieToLabel('INRC_NOW', blockCToBusEd.a, { x: pos.x + 12950, y: pos.y - 870 });
   tieToLabel('OUTRC_NOW', blockCToBusEd.b, { x: pos.x + 12950, y: pos.y - 890 });
-  const blockCToBusNow = buildOr(parent, { x: pos.x + 13050, y: pos.y - 850 });
-  tieToLabel('INBLOCK_READ_NOW', blockCToBusNow.a, { x: pos.x + 12950, y: pos.y - 850 });
-  tieToLabel('OUTBLOCK_WRITE_NOW', blockCToBusNow.b, { x: pos.x + 12950, y: pos.y - 830 });
-  const blockCToBusFinal = buildOr(parent, { x: pos.x + 13100, y: pos.y - 860 });
-  wire(parent, blockCToBusNow.out, blockCToBusFinal.a);
-  wire(parent, blockCToBusEd.out, blockCToBusFinal.b);
-  for (let i = 0; i < 8; i++) {
-    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 13100, y: pos.y - 800 + i * 20 });
-    tieToLabel(`REGC${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 13000, y: pos.y - 800 + i * 20 });
-    wire(parent, blockCToBusFinal.out, buf.pins[bufDef.ports[1]!]!);
-    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 13200, y: pos.y - 800 + i * 20 });
-  }
+  cBankEnables.push((bufEnable) => wire(parent, blockCToBusEd.out, bufEnable));
+  cBankEnables.forEach((enable, bank) => {
+    const dx = bank * 400;
+    for (let i = 0; i < 8; i++) {
+      const buf = makeChipInstance(parent, bufDef, { x: pos.x + 13100 + dx, y: pos.y - 800 + i * 20 });
+      tieToLabel(`REGC${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 13000 + dx, y: pos.y - 800 + i * 20 });
+      enable(buf.pins[bufDef.ports[1]!]!);
+      tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 13200 + dx, y: pos.y - 800 + i * 20 });
+    }
+  });
   // `ioPortDataIn`'s own bus-driver bank: the external device's own raw
   // response, published onto the bus for RAM's own write, only while
   // `INBLOCK_WRITE_NOW` fires. No holding register between this and

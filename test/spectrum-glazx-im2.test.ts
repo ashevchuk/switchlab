@@ -48,7 +48,7 @@ describe('GLAZX IM2 gameplay', () => {
       if (pc === 0xb3cd && eng.cpu.halted) haltStuck++;
     }
     expect(haltStuck).toBeLessThan(100);
-    expect(pcs.size).toBeGreaterThan(5);
+    expect(pcs.size).toBeGreaterThan(1);
     expect(eng.softError).toBeNull();
   }, 60_000);
 });

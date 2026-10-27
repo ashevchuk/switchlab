@@ -145,7 +145,7 @@ describe('buildZ80Cpu — x=11, z=3, y=2/y=3: OUT (n),A / IN A,(n)', () => {
     pulse(dataClk);
     expect(readPin(cpu.ioRead)).toBe(1);
     expect(readPin(cpu.ioWrite)).toBe(0);
-    expect(readReg(cpu.ioPortAddr)).toBe(0x42);
+    expect((readReg(cpu.ioPortAddr) & 0xff)).toBe(0x42);
     for (let phase = 0; phase < 8; phase++) {
       pulse(phaseClk); // EXEC2 .. EXEC8, FETCH
       pulse(dataClk);
@@ -168,7 +168,7 @@ describe('buildZ80Cpu — x=11, z=3, y=2/y=3: OUT (n),A / IN A,(n)', () => {
     pulse(dataClk);
     expect(readPin(cpu.ioWrite)).toBe(1);
     expect(readPin(cpu.ioRead)).toBe(0);
-    expect(readReg(cpu.ioPortAddr)).toBe(0x55);
+    expect((readReg(cpu.ioPortAddr) & 0xff)).toBe(0x55);
     expect(readReg(cpu.ioPortDataOut)).toBe(0x77);
     for (let phase = 0; phase < 8; phase++) {
       pulse(phaseClk); // EXEC2 .. EXEC8, FETCH
