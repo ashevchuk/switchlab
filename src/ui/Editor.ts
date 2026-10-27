@@ -37,6 +37,7 @@ import {
   dist,
   findComponentNear,
   findPinNear,
+  insideBody,
   findWaypointNear,
   findWireNear,
   GRID,
@@ -65,7 +66,7 @@ import {
 } from './routeChannel.js';
 import { spreadOverlaps } from './wireSpread.js';
 import { laneTargets, snapLane, type Axis, type SnapTarget } from './laneSnap.js';
-import { dragCorner, dragSegment, dropReversals, nearestCorner, nearestLeg } from './wireEdit.js';
+import { cleanRoute, dragCorner, dragSegment, dropReversals, nearestCorner, nearestLeg } from './wireEdit.js';
 
 export type SnapMode = 'grid' | 'half' | 'free';
 
@@ -150,6 +151,8 @@ export class Editor {
     kind: 'corner' | 'segment';
     index: number;
     base: Point[];
+    /** Where the part was taken hold of; a leg at a pin jogs there. */
+    grab: Point;
     /** Grabbed vertex (corner) or leg line (segment) minus the pointer, so the grab never jumps. */
     offset: Point;
     /** Axis perpendicular to the dragged leg; unused for corners. */
@@ -157,6 +160,11 @@ export class Editor {
     targets: Record<Axis, SnapTarget[]>;
     restore: { waypoints?: Point[]; manual?: boolean };
   } | null = null;
+  /** Wire part under the pointer in the select tool, for cursor and highlight; a segment carries its leg. */
+  wireGrip:
+    | { wireId: string; kind: 'corner' }
+    | { wireId: string; kind: 'segment'; a: Point; b: Point; vertical: boolean }
+    | null = null;
   /** World units per screen pixel; set by main.ts so snap reach feels the same at any zoom. */
   worldPerPixel = 1;
   /** Alignment line shown while a dragged wire part is pulled onto a body, wire or pin gap. */
@@ -264,6 +272,7 @@ export class Editor {
     const pinRadius = this.tool.kind === 'wire' ? 22 : 10;
     this.hoveredPinId = findPinNear(this.circuit, p, pinRadius)?.id ?? null;
     this.hoveredWireId = (findWaypointNear(this.circuit, p)?.wireId ?? findWireNear(this.circuit, p)?.wireId) ?? null;
+    this.updateWireGrip(p);
     // Snap the rubber-band cursor to a nearby pin while routing.
     if (this.tool.kind === 'wire' && this.hoveredPinId) {
       const pin = this.circuit.allPins().find((x) => x.id === this.hoveredPinId);
@@ -271,6 +280,43 @@ export class Editor {
     } else {
       this.mouse = p;
     }
+  }
+
+  /**
+   * What a press at `p` takes hold of on a wire. Component hit boxes include a margin around
+   * pins and edges where wires run, so a bend wins everywhere and a segment wins unless `p`
+   * is inside the part's body. Selected wires are searched first so an unselected wire lying
+   * on top of them cannot take the grab.
+   */
+  private wireGrabAt(p: Point): { wireId: string; kind: 'corner' | 'segment' } | null {
+    const bend = findWaypointNear(this.circuit, p);
+    if (bend) return { wireId: bend.wireId, kind: 'corner' };
+    const seg =
+      findWireNear(this.circuit, p, 6, this.selectedWireIds) ?? findWireNear(this.circuit, p);
+    if (!seg) return null;
+    const near = findComponentNear(this.circuit, p);
+    if (near && insideBody(near, p)) return null;
+    return { wireId: seg.wireId, kind: 'segment' };
+  }
+
+  /** Cursor and highlight feedback for the wire part under `p`. */
+  private updateWireGrip(p: Point): void {
+    this.wireGrip = null;
+    if (this.tool.kind !== 'select' || this.isDragging) return;
+    const grab = this.wireGrabAt(p);
+    if (!grab) return;
+    if (grab.kind === 'corner') {
+      this.wireGrip = { wireId: grab.wireId, kind: 'corner' };
+      return;
+    }
+    const wire = this.circuit.wires.get(grab.wireId);
+    const drawn = wire && wirePolyline(this.circuit, wire);
+    if (!drawn) return;
+    const path = dropReversals(drawn);
+    const leg = nearestLeg(path, p);
+    const a = path[leg]!;
+    const b = path[leg + 1]!;
+    this.wireGrip = { wireId: grab.wireId, kind: 'segment', a, b, vertical: Math.abs(a.x - b.x) < 0.5 };
   }
 
   handleMouseDown(p: Point, opts?: { altKey?: boolean; shiftKey?: boolean }): void {
@@ -293,12 +339,8 @@ export class Editor {
       }
     }
 
-    // Component hit boxes overlap their pin stubs, so a wire bend (always) and a
-    // segment of a selected wire win over the component. Searching the selected
-    // wires alone keeps this true when an unselected wire lies on top of them.
-    const selectedHit = findWireNear(this.circuit, p, 6, this.selectedWireIds);
-    const wireFirst = findWaypointNear(this.circuit, p) !== undefined || selectedHit !== undefined;
-    const hit = wireFirst ? undefined : findComponentNear(this.circuit, p);
+    const grab = this.wireGrabAt(p);
+    const hit = grab ? undefined : findComponentNear(this.circuit, p);
     if (hit) {
       // Dragging an already-multi-selected component moves the whole
       // selection together; dragging anything else is just that one part
@@ -337,20 +379,18 @@ export class Editor {
       return;
     }
 
-    const wp = findWaypointNear(this.circuit, p);
-    if (wp) {
-      this.beginWireDrag(wp.wireId, 'corner', p);
-      this.selectedWireId = wp.wireId;
+    if (grab?.kind === 'corner') {
+      this.beginWireDrag(grab.wireId, 'corner', p);
+      this.selectedWireId = grab.wireId;
       this.selectedIds.clear();
       return;
     }
 
-    const wireHit = selectedHit ?? findWireNear(this.circuit, p);
-    if (wireHit) {
-      this.pendingWireGrab = { wireId: wireHit.wireId, downPoint: p };
-      this.selectedWireId = wireHit.wireId;
+    if (grab) {
+      this.pendingWireGrab = { wireId: grab.wireId, downPoint: p };
+      this.selectedWireId = grab.wireId;
       this.selectedIds.clear();
-      this.highlightNetOfWire(wireHit.wireId);
+      this.highlightNetOfWire(grab.wireId);
       return;
     }
 
@@ -527,6 +567,7 @@ export class Editor {
       kind,
       index,
       base,
+      grab,
       offset,
       axis,
       targets: {
@@ -559,7 +600,12 @@ export class Editor {
       path = dragCorner(drag.base, drag.index, target);
     } else {
       const value = settle(drag.offset[drag.axis] + pointer[drag.axis], drag.axis);
-      path = dragSegment(drag.base, drag.index, drag.axis === 'x' ? { x: value, y: pointer.y } : { x: pointer.x, y: value });
+      path = dragSegment(
+        drag.base,
+        drag.index,
+        drag.axis === 'x' ? { x: value, y: pointer.y } : { x: pointer.x, y: value },
+        drag.grab,
+      );
     }
     const mid = interiorWaypoints(path);
     if (mid.length > 0) wire.waypoints = mid;
@@ -1191,17 +1237,20 @@ export class Editor {
         preferRail: preferRailById.get(id),
         router: 'channel' as const,
       };
-      const full = routeWirePoints([a.pos, b.pos], baseOpts);
+      // The channel router lands interior corners on the grid while pins may sit off it, which
+      // leaves slanted legs; expand them exactly as the renderer will before cleaning up.
+      const tidied = (path: Point[]) => cleanRoute(routeWirePoints(path), baseOpts.obstacles, baseOpts.avoidOverlap);
+      const full = tidied(routeWirePoints([a.pos, b.pos], baseOpts));
       if (!forceFull && w.waypoints?.length) {
         // Intentional ortho bends (Tidy / T): keep when clear of bodies/stairs.
         // After a component drag we skip this so mid-drag previews cannot freeze.
         if (preserveManual) {
           const manual = tryKeepManualRoute(a.pos, b.pos, w.waypoints, baseOpts);
-          if (manual) return manual;
+          if (manual) return tidied(manual);
         }
         // Drag left an ortho far-side stub — short leg only, if competitive.
         const partial = tryLocalRepairRoute(a.pos, b.pos, w.waypoints, baseOpts);
-        if (partial && localRepairBeatsFull(partial, full, baseOpts)) return partial;
+        if (partial && localRepairBeatsFull(partial, full, baseOpts)) return tidied(partial);
       }
       return full;
     };
@@ -1628,7 +1677,8 @@ export class Editor {
       return;
     }
     if (this.tool.kind === 'select') {
-      const hit = findComponentNear(this.circuit, p);
+      const grabbed = this.wireGrabAt(p);
+      const hit = grabbed ? undefined : findComponentNear(this.circuit, p);
       if (hit) {
         this.selectedWireId = null;
         if (hit.kind === 'input') hit.value = hit.value === 1 ? 0 : 1;
@@ -1680,7 +1730,7 @@ export class Editor {
         }
         return;
       }
-      const wireId = findWaypointNear(this.circuit, p)?.wireId ?? findWireNear(this.circuit, p)?.wireId;
+      const wireId = grabbed?.wireId;
       if (wireId) {
         this.selectedIds.clear();
         this.selectedWireId = wireId;

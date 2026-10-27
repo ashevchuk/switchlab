@@ -316,6 +316,8 @@ editor.onComponentsRemoved = (ids) => {
 (window as unknown as { __simHelpCapture: { tidyAll: () => number } }).__simHelpCapture = {
   tidyAll: () => editor.tidyAllWires(false),
 };
+/** Playwright e2e hook: read editor/camera state and map world to screen points. */
+(window as unknown as { __simTest: { editor: Editor; camera: Camera } }).__simTest = { editor, camera };
 const editHistory = new EditHistory();
 const tutorial = new Tutorial(stage);
 tutorial.onHintChange = (hint) => {
@@ -2824,6 +2826,9 @@ canvas.addEventListener('mousedown', (ev) => {
 function updateCursor(): void {
   if (editor.isDragging) {
     canvas.style.cursor = 'grabbing';
+  } else if (editor.tool.kind === 'select' && editor.wireGrip) {
+    const grip = editor.wireGrip;
+    canvas.style.cursor = grip.kind === 'corner' ? 'move' : grip.vertical ? 'ew-resize' : 'ns-resize';
   } else if (editor.tool.kind === 'select' && (editor.hoveredComponentId || editor.hoveredWireId)) {
     canvas.style.cursor = 'grab';
   } else {

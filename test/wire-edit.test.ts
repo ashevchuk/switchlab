@@ -7,7 +7,7 @@ import { Circuit } from '../src/sim/Circuit.js';
 import { makeLed, makeTransistor } from '../src/sim/library.js';
 import { Editor } from '../src/ui/Editor.js';
 import { findComponentNear, pathHitsObstacles, routingObstacles, wirePolyline } from '../src/ui/geometry.js';
-import { dragCorner, dragSegment } from '../src/ui/wireEdit.js';
+import { cleanRoute, dragCorner, dragSegment } from '../src/ui/wireEdit.js';
 
 function isOrtho(path: Point[]): boolean {
   for (let i = 0; i < path.length - 1; i++) {
@@ -279,5 +279,145 @@ describe('two wires lying on top of each other', () => {
     editor.handleMouseUp(to, false);
     expect(t.pos).toEqual({ x: 0, y: 0 });
     expect(selected.manual).toBe(true);
+  });
+});
+
+describe('wire versus component in the hit margin', () => {
+  function setup() {
+    const circuit = new Circuit();
+    const editor = new Editor(circuit, new ChipLibrary());
+    const t = makeTransistor(circuit, 'N', { x: 0, y: 0 });
+    const led = makeLed(circuit, { x: 200, y: -120 });
+    const y = t.pins.drain.pos.y;
+    const w = circuit.addWire(t.pins.drain.id, led.pins.in.id, [
+      { x: 40, y },
+      { x: 40, y: -120 },
+    ]);
+    return { circuit, editor, t, w, y };
+  }
+
+  it('selects an unselected wire clicked where the transistor only has hit padding', () => {
+    const { editor, t, w, y } = setup();
+    const p = { x: 20, y };
+    expect(findComponentNear(editor.circuit, p)?.id).toBe(t.id);
+    editor.handleMouseDown(p);
+    editor.handleMouseUp(p, false);
+    expect(editor.selectedWireId).toBe(w.id);
+    expect(editor.selectedIds.size).toBe(0);
+  });
+
+  it('drags an unselected wire out of the padding without moving the transistor', () => {
+    const { editor, t, w, y } = setup();
+    const from = { x: 20, y };
+    const to = { x: 20, y: y - 30 };
+    editor.handleMouseDown(from);
+    editor.handleMouseDrag(to);
+    editor.handleMouseUp(to, false);
+    expect(t.pos).toEqual({ x: 0, y: 0 });
+    expect(w.manual).toBe(true);
+  });
+
+  it('still selects and moves the component when the pointer is inside its body', () => {
+    const { editor, t } = setup();
+    const p = { x: 0, y: 0 };
+    editor.handleMouseDown(p);
+    editor.handleMouseUp(p, false);
+    expect(editor.selectedIds.has(t.id)).toBe(true);
+  });
+});
+
+describe('cleanRoute', () => {
+  it('collapses a stair left by an off-grid pin', () => {
+    const path = [
+      { x: 176, y: 76 },
+      { x: 210, y: 76 },
+      { x: 210, y: 80 },
+      { x: 220, y: 80 },
+      { x: 220, y: 130 },
+      { x: 240, y: 130 },
+    ];
+    expect(cleanRoute(path, [])).toEqual([
+      { x: 176, y: 76 },
+      { x: 220, y: 76 },
+      { x: 220, y: 130 },
+      { x: 240, y: 130 },
+    ]);
+  });
+
+  it('drops an up-then-down reversal on the same line', () => {
+    const out = cleanRoute(
+      [
+        { x: 716, y: 124 },
+        { x: 750, y: 124 },
+        { x: 750, y: 120 },
+        { x: 750, y: 140 },
+        { x: 690, y: 140 },
+      ],
+      [],
+    );
+    expect(out).toEqual([
+      { x: 716, y: 124 },
+      { x: 750, y: 124 },
+      { x: 750, y: 140 },
+      { x: 690, y: 140 },
+    ]);
+  });
+
+  it('keeps the jog when merging would run through a body', () => {
+    const path = [
+      { x: 0, y: 0 },
+      { x: 40, y: 0 },
+      { x: 40, y: 4 },
+      { x: 60, y: 4 },
+      { x: 60, y: 100 },
+      { x: 80, y: 100 },
+    ];
+    const wall = { minX: 45, minY: -10, maxX: 55, maxY: 2 };
+    expect(cleanRoute(path, [wall])).toEqual(path);
+  });
+});
+
+describe('jog at the grab point', () => {
+  it('puts the jog where the leg at a pin was taken hold of', () => {
+    const out = dragSegment(Z, 0, { x: 30, y: 20 }, { x: 35, y: 0 });
+    expect(out[0]).toEqual({ x: 0, y: 0 });
+    expect(out).toContainEqual({ x: 35, y: 0 });
+    expect(out).toContainEqual({ x: 35, y: 20 });
+  });
+
+  it('keeps a grid of straight stub when grabbed right at the pin', () => {
+    const out = dragSegment(Z, 0, { x: 30, y: 20 }, { x: 2, y: 0 });
+    expect(out).toContainEqual({ x: 10, y: 0 });
+  });
+});
+
+describe('wire grip feedback', () => {
+  function setup() {
+    const circuit = new Circuit();
+    const editor = new Editor(circuit, new ChipLibrary());
+    const t = makeTransistor(circuit, 'N', { x: 0, y: 0 });
+    const led = makeLed(circuit, { x: 200, y: -120 });
+    const y = t.pins.drain.pos.y;
+    circuit.addWire(t.pins.drain.id, led.pins.in.id, [
+      { x: 80, y },
+      { x: 80, y: -120 },
+    ]);
+    return { editor, y };
+  }
+
+  it('reports a vertical leg for ew-resize and a horizontal one for ns-resize', () => {
+    const { editor, y } = setup();
+    editor.handleMouseMove({ x: 80, y: y / 2 - 30 });
+    expect(editor.wireGrip).toMatchObject({ kind: 'segment', vertical: true });
+    editor.handleMouseMove({ x: 120, y: -120 });
+    expect(editor.wireGrip).toMatchObject({ kind: 'segment', vertical: false });
+  });
+
+  it('reports a corner over a bend and nothing in empty space', () => {
+    const { editor, y } = setup();
+    editor.handleMouseMove({ x: 80, y });
+    expect(editor.wireGrip).toMatchObject({ kind: 'corner' });
+    editor.handleMouseMove({ x: 500, y: 500 });
+    expect(editor.wireGrip).toBeNull();
   });
 });

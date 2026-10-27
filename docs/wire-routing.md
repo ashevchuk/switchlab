@@ -136,3 +136,20 @@ orthogonal path, splitting the pin-adjacent legs into a short pin stub plus a
 movable vertex so the pin exit direction survives. Edited wires get
 `Wire.manual`; implicit tidies keep them while the stored path is orthogonal and
 clear of foreign bodies, explicit tidy of the wire clears the flag.
+
+## Pin exit direction
+
+`pinRouteDir` derives the direction a wire leaves a pin. Chips, RAM and ROM have pins
+only on their left and right stacks, so the direction is taken from the pin's side of
+the body. Inferring it from the pin's offset aspect (`pinExitDir`) sends the top and
+bottom pins of a tall package out vertically along the pin column, which makes a bus
+into that package arrive on top of itself (ALU8 inputs overlapped: 2464 units before,
+0 after).
+
+Routed paths are expanded to orthogonal legs the way the renderer draws them and then
+passed through `cleanRoute`: doubling back on a line is dropped and a jog shorter than
+half a grid between parallel legs is collapsed, only when the result stays clear of
+bodies and does not run along other wires more than before. Pins off the grid leave
+slanted legs in the channel router's output, which is what produced those jogs.
+`lab-mini-cpu` places COUNTER4 inside SOFT_RAM16; the two body hits that remain there come
+from the layout, not from the router.

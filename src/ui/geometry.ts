@@ -93,6 +93,12 @@ export function pinRouteDir(
 ): RouteDir | null {
   if (!comp) return null;
   if (comp.kind === 'junction' || comp.kind === 'label') return null;
+  // Package pins sit only on the left and right stacks; guessing from the aspect of a tall
+  // package would send its top and bottom pins out vertically along the pin column.
+  if (comp.kind === 'chip' || comp.kind === 'ram' || comp.kind === 'rom') {
+    const dx = pinPos.x - comp.pos.x;
+    if (Math.abs(dx) >= 0.5) return dx > 0 ? 'E' : 'W';
+  }
   return pinExitDir(pinPos, comp.pos);
 }
 
@@ -1121,6 +1127,17 @@ function boundsHalfSize(c: Component): [number, number] {
     }
   })();
   return [hw + HIT_PAD, hh + HIT_PAD];
+}
+
+/**
+ * Pins sit on a part's outline, so wires leave it from within the hit box. `p` counts as inside
+ * the body only when it is well clear of the outline, so a wire near a pin is not mistaken for the part.
+ */
+const BODY_INSET = HIT_PAD + 8;
+
+export function insideBody(c: Component, p: Point): boolean {
+  const [hw, hh] = boundsHalfSize(c);
+  return Math.abs(c.pos.x - p.x) <= hw - BODY_INSET && Math.abs(c.pos.y - p.y) <= hh - BODY_INSET;
 }
 
 /** Component whose drawn body contains `p`. */

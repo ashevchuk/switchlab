@@ -417,6 +417,21 @@ export function draw(
     }
   }
 
+  // The leg of a wire under the pointer, so it is clear which part a drag will slide.
+  const grip = editor.wireGrip;
+  if (grip?.kind === 'segment') {
+    ctx.save();
+    ctx.strokeStyle = COLOR.hover;
+    ctx.globalAlpha = 0.8;
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(grip.a.x, grip.a.y);
+    ctx.lineTo(grip.b.x, grip.b.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // Marquee selection rectangle (already in world space, same transform as everything else).
   if (editor.marqueeStart && editor.dragging) {
     const { x, y } = editor.marqueeStart;
