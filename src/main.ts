@@ -1,6 +1,9 @@
-import { buildAlu, buildInstructionRegister, buildMinimalCpu, buildProgramCounter, buildRegister, buildRingCounter, buildStubRom, buildZ80Cpu } from './sim/blocks.js';
+import { buildAlu, buildInstructionRegister, buildProgramCounter, buildRegister, buildRingCounter, buildStubRom, buildZ80Cpu } from './sim/blocks.js';
 import { ChipLibrary } from './sim/ChipLibrary.js';
 import { bumpStructureVersion, Circuit, currentStructureVersion } from './sim/Circuit.js';
+import { addBlinkBench, TINY_CPU_BLINK_HEX } from './examples/tinyCpuBlink.js';
+import { disassembleTiny } from './machine/tinyDisassembler.js';
+import { placeTinyCpu, tinyCpuForRam, tinyPcPins } from './sim/foldTinyCpu.js';
 import { foldZ80CpuLeavingRam, newComponentIdSet, packFoldedMachine } from './sim/foldZ80.js';
 import { replaceLongWiresWithLabels } from './sim/labelWires.js';
 import { circuitHasPulseGen, circuitNeedsLabTick, tickLabInstruments } from './sim/labTick.js';
@@ -1445,9 +1448,9 @@ document.getElementById('add-ram')?.addEventListener('click', async () => {
   memoryEditor.attach(ram);
 });
 
-/** Parses "05,83,0a,81" into raw program bytes for buildMinimalCpu's RAM — no power-of-two rounding needed here (makeRam's own `initial` handles a program shorter than the RAM's full capacity by leaving the rest zeroed). */
+/** Parses "05,83,0a,81" into raw program bytes for the Tiny CPU's RAM — no power-of-two rounding needed here (makeRam's own `initial` handles a program shorter than the RAM's full capacity by leaving the rest zeroed). */
 async function promptProgramBytes(): Promise<Uint8Array | null> {
-  const raw = await showPrompt('Program bytes, comma-separated hex (e.g. 05,83,0a,81 — see ARCHITECTURE.md\'s "Decode and execute" for the LDI/ADI encoding):', '05,83,0a,81');
+  const raw = await showPrompt('Program bytes, comma-separated hex (e.g. 05,83,0a,81 — see ARCHITECTURE.md\'s "Decode and execute" for the LDI/ADI encoding):', TINY_CPU_BLINK_HEX);
   if (!raw) return null;
   const bytes = raw
     .split(',')
@@ -1463,7 +1466,8 @@ document.getElementById('add-cpu')?.addEventListener('click', async () => {
   const program = await promptProgramBytes();
   if (program === null) return;
   const pos = snap(camera.screenToWorld({ x: vw() / 2, y: vh() / 2 }, vw(), vh()));
-  buildMinimalCpu(editor.circuit, library, addrBits, program, pos);
+  const { chip } = placeTinyCpu(editor.circuit, library, addrBits, program, pos);
+  addBlinkBench(editor.circuit, chip);
   refreshChipPalette();
 });
 
@@ -3393,6 +3397,18 @@ function drawSoftBitmapHud(c: CanvasRenderingContext2D, _vw: number, vh: number)
  * oscillator, one that legitimately never does) keeps stepping and drawing
  * every frame regardless of `uiDirty`, exactly as before this change.
  */
+function readTinyPc(chip: ChipInstanceComponent): number | null {
+  if (!lastFlatNetMap) return null;
+  let pc = 0;
+  for (const [i, pin] of tinyPcPins(chip).entries()) {
+    const net = lastFlatNetMap.netOf.get(pin.id);
+    const level = net === undefined ? undefined : simState.levelOf.get(net);
+    if (level !== 0 && level !== 1) return null;
+    pc |= level << i;
+  }
+  return pc;
+}
+
 function frame(): void {
   syncInspector();
   if (tutorial.active) tutorial.tick(editor.circuit);
@@ -3410,13 +3426,12 @@ function frame(): void {
   if (machineRunner.running) {
     machineWorked = machineRunner.tickBudget();
   }
-  if (memoryEditor.attached && machineRunner.isSoft) {
-    const soft = machineRunner.softCpu;
-    if (soft && memoryEditor.setLivePc(soft.pc & 0xffff)) {
-      machineWorked = true;
-    }
-  } else if (memoryEditor.attached) {
-    memoryEditor.setLivePc(null);
+  if (memoryEditor.attached) {
+    const tinyCpu = memoryEditor.memory?.kind === 'ram' ? tinyCpuForRam(topCircuit, library, memoryEditor.memory) : undefined;
+    memoryEditor.setDisassembler(tinyCpu ? disassembleTiny : null);
+    const soft = machineRunner.isSoft ? machineRunner.softCpu : null;
+    const pc = tinyCpu ? readTinyPc(tinyCpu) : soft ? soft.pc & 0xffff : null;
+    if (memoryEditor.setLivePc(pc) && (tinyCpu || soft)) machineWorked = true;
   }
 
   // No manual Lab Run — keep ticking while a pulse/button/analyzer actually

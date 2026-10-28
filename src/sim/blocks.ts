@@ -1401,8 +1401,27 @@ export interface MinimalCpu {
   pc: Pin[];
   ir: Pin[];
   acc: Pin[];
+  out: Pin[]; // output port register, loaded from ACC by OUT
   phase: Pin[]; // one-hot: phase[0]=FETCH, phase[1]=INCREMENT, phase[2]=DECODE_EXECUTE
   ram: RamComponent;
+}
+
+/** Components and interface pins of one sub-block, recorded for `foldTinyCpu`. */
+export interface CpuBlock {
+  ids: Set<string>;
+  pins: Record<string, Pin | Pin[]>;
+}
+
+export type CpuBlocks = Map<string, CpuBlock>;
+
+function trackBlock<T>(parent: Circuit, blocks: CpuBlocks | undefined, name: string, build: () => T, pins: (built: T) => CpuBlock['pins']): T {
+  const before = new Set(parent.components.keys());
+  const built = build();
+  if (blocks) {
+    const ids = new Set([...parent.components.keys()].filter((id) => !before.has(id)));
+    blocks.set(name, { ids, pins: pins(built) });
+  }
+  return built;
 }
 
 /**
@@ -1428,7 +1447,8 @@ export interface MinimalCpu {
  *   bits 7-5 = 100: XRI imm    ACC <- ACC ^ imm
  *   bits 7-5 = 101: STORE addr RAM[addr] <- ACC (ACC unchanged)
  *   bits 7-5 = 110: LOAD addr  ACC <- RAM[addr]
- *   bits 7-5 = 111: reserved   no-op: neither ACC nor RAM changes
+ *   bits 7-5 = 111, bit 4 = 0: JMP addr   PC <- bits 0-3 of the instruction
+ *   bits 7-5 = 111, bit 4 = 1: OUT        port register <- ACC (bits 0-3 ignored)
  *
  * (`ANI`/`ORI`/`XRI` follow the 8080/Z80 assembly convention for
  * "AND/OR/XOR immediate" — the one place this made-up ISA's naming
@@ -1504,17 +1524,23 @@ export function buildMinimalCpu(
   addrBits: number,
   program?: Uint8Array,
   pos: Point = { x: 0, y: 0 },
+  blocks?: CpuBlocks,
 ): MinimalCpu {
   if (addrBits > 5) throw new Error('buildMinimalCpu: STORE/LOAD encode their target address in 5 bits, so addrBits must be <= 5');
   makeSource(parent, 1, { x: pos.x - 200, y: pos.y - 400 }); // rail driver
   makeSource(parent, 0, { x: pos.x - 200, y: pos.y - 360 });
 
-  const pc = buildProgramCounter(parent, library, addrBits, { x: pos.x, y: pos.y });
+  const pc = trackBlock(parent, blocks, 'PC', () => buildProgramCounter(parent, library, addrBits, { x: pos.x, y: pos.y }),
+    (b) => ({ clk: b.clk, reset: b.reset, load: b.load, d: b.d, q: b.q }));
   const ram = makeRam(parent, addrBits, 8, program, { x: pos.x + 1400, y: pos.y });
-  const ir = buildInstructionRegister(parent, library, { x: pos.x + 2600, y: pos.y });
-  const acc = buildRegister(parent, library, 8, { x: pos.x + 4600, y: pos.y });
-  const alu = buildAlu(parent, library, 8, { x: pos.x + 3400, y: pos.y + 1200 });
-  const fsm = buildRingCounter(parent, library, 3, { x: pos.x, y: pos.y + 2400 });
+  const ir = trackBlock(parent, blocks, 'IR', () => buildInstructionRegister(parent, library, { x: pos.x + 2600, y: pos.y }),
+    (b) => ({ clk: b.clk, we: b.we, d: b.d, q: b.q }));
+  const acc = trackBlock(parent, blocks, 'ACC', () => buildRegister(parent, library, 8, { x: pos.x + 4600, y: pos.y }),
+    (b) => ({ clk: b.clk, we: b.we, d: b.d, q: b.q }));
+  const alu = trackBlock(parent, blocks, 'ALU', () => buildAlu(parent, library, 8, { x: pos.x + 3400, y: pos.y + 1200 }),
+    (b) => ({ a: b.a, b: b.b, out: b.out, cin: b.cin, cout: b.cout, op0: b.op0, op1: b.op1 }));
+  const fsm = trackBlock(parent, blocks, 'FSM', () => buildRingCounter(parent, library, 3, { x: pos.x, y: pos.y + 2400 }),
+    (b) => ({ clk: b.clk, load: b.load, d: b.d, phase: b.phase }));
   const muxDef = getMux2Chip(library);
   const bufDef = getTriBufChip(library);
 
@@ -1527,7 +1553,6 @@ export function buildMinimalCpu(
   const notPhase1 = buildNot(parent, { x: pos.x - 200, y: pos.y - 200 });
   wire(parent, fsm.phase[1]!, notPhase1.in);
   wire(parent, notPhase1.out, pc.load);
-  pc.q.forEach((q, i) => wire(parent, q, pc.d[i]!)); // self-loop: "reload" == hold
 
   // Decode. Past 4 instructions, no single opcode bit cleanly splits the
   // encoding in half anymore (5 ACC-writing instructions vs. 3 others
@@ -1538,7 +1563,7 @@ export function buildMinimalCpu(
   wire(parent, ir.q[5]!, dec.addr[0]!);
   wire(parent, ir.q[6]!, dec.addr[1]!);
   wire(parent, ir.q[7]!, dec.addr[2]!);
-  const [isLdi, isAdi, isAni, isOri, isXri, isStore, isLoad] = dec.lines; // lines[7]: reserved, unused
+  const [isLdi, isAdi, isAni, isOri, isXri, isStore, isLoad, isExt] = dec.lines; // isExt: JMP/OUT, split by ir bit 4
 
   // The ALU's own op0/op1 (00 ADD, 01 AND, 10 OR, 11 XOR — see
   // buildAluSlice) read straight off which arithmetic instruction decoded:
@@ -1597,6 +1622,37 @@ export function buildMinimalCpu(
   wire(parent, loadNow.out, ramOe.b);
   wire(parent, ramOe.out, ram.pins.oe!);
 
+  // JMP (111_0aaaa) and OUT (111_1xxxx) share the 111 slot, split by bit 4.
+  const notBit4 = buildNot(parent, { x: pos.x + 3900, y: pos.y + 500 });
+  wire(parent, ir.q[4]!, notBit4.in);
+  const isJmp = buildAnd(parent, { x: pos.x + 4100, y: pos.y + 500 });
+  wire(parent, isExt!, isJmp.a);
+  wire(parent, notBit4.out, isJmp.b);
+  const jmpNow = buildAnd(parent, { x: pos.x + 4300, y: pos.y + 500 });
+  wire(parent, isJmp.out, jmpNow.a);
+  wire(parent, fsm.phase[2]!, jmpNow.b);
+  const isOut = buildAnd(parent, { x: pos.x + 4100, y: pos.y + 700 });
+  wire(parent, isExt!, isOut.a);
+  wire(parent, ir.q[4]!, isOut.b);
+  const outNow = buildAnd(parent, { x: pos.x + 4300, y: pos.y + 700 });
+  wire(parent, isOut.out, outNow.a);
+  wire(parent, fsm.phase[2]!, outNow.b);
+
+  // PC's next value: itself (hold), or the JMP target. Bit 4 of the target is
+  // always 0 because that bit selects JMP vs OUT.
+  pc.q.forEach((q, i) => {
+    const mux = makeChipInstance(parent, muxDef, { x: pos.x + 300, y: pos.y - 300 - i * 100 });
+    wire(parent, jmpNow.out, mux.pins[muxDef.ports[0]!]!); // sel
+    wire(parent, q, mux.pins[muxDef.ports[1]!]!); // in0: hold
+    wire(parent, i < 4 ? ir.q[i]! : railPin(parent, 'GND', { x: pos.x + 300, y: pos.y - 200 - i * 100 }), mux.pins[muxDef.ports[2]!]!); // in1: JMP target
+    wire(parent, mux.pins[muxDef.ports[3]!]!, pc.d[i]!);
+  });
+
+  const port = trackBlock(parent, blocks, 'OUT', () => buildRegister(parent, library, 8, { x: pos.x + 5600, y: pos.y + 1200 }),
+    (b) => ({ clk: b.clk, we: b.we, d: b.d, q: b.q }));
+  acc.q.forEach((q, i) => wire(parent, q, port.d[i]!));
+  wire(parent, outNow.out, port.we);
+
   // RAM's address bus: PC, except during a STORE or LOAD's own
   // DECODE_EXECUTE, when it's the instruction's own embedded target
   // address instead — both share the same low 5 bits, reinterpreted by
@@ -1645,9 +1701,10 @@ export function buildMinimalCpu(
   // gates can never safely share one edge in this solver.
   wire(parent, pc.clk, ir.clk);
   wire(parent, pc.clk, acc.clk);
+  wire(parent, pc.clk, port.clk);
   wire(parent, pc.clk, ram.pins.clk!);
 
-  return { clk: pc.clk, phaseClk: fsm.clk, reset: pc.reset, fsmLoad: fsm.load, fsmD: fsm.d, pc: pc.q, ir: ir.q, acc: acc.q, phase: fsm.phase, ram };
+  return { clk: pc.clk, phaseClk: fsm.clk, reset: pc.reset, fsmLoad: fsm.load, fsmD: fsm.d, pc: pc.q, ir: ir.q, acc: acc.q, out: port.q, phase: fsm.phase, ram };
 }
 
 export interface Z80Decoder {

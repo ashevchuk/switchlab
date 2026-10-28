@@ -1117,7 +1117,8 @@ bits 7-5 = 011: ORI imm    ACC <- ACC | imm
 bits 7-5 = 100: XRI imm    ACC <- ACC ^ imm
 bits 7-5 = 101: STORE addr RAM[addr] <- ACC (ACC unchanged)
 bits 7-5 = 110: LOAD addr  ACC <- RAM[addr]
-bits 7-5 = 111: reserved   no-op: neither ACC nor RAM changes
+bits 7-5 = 111, bit 4 = 0: JMP addr  PC <- bits 0-3 of the instruction
+bits 7-5 = 111, bit 4 = 1: OUT       port register <- ACC
 ```
 
 (`ANI`/`ORI`/`XRI` follow the 8080/Z80 assembly convention for "AND/OR/XOR
@@ -1135,9 +1136,12 @@ instructions vs. 3 others isn't a power-of-two split any one bit can
 express, the way `bit7` alone used to separate "ACC op" from "memory op"
 cleanly for LDI/ADI vs. STORE/LOAD). `dec.lines[0..6]` name
 `isLdi`/`isAdi`/`isAni`/`isOri`/`isXri`/`isStore`/`isLoad`; `lines[7]`
-(the reserved pattern) is never referenced — every control signal is built
-from what an instruction *should* do, so the reserved pattern is inert by
-matching none of them, not by being checked for and excluded. From there:
+(`isExt`) is split by instruction bit 4 into JMP and OUT. JMP reloads PC
+through a hold-or-target mux per PC bit, enabled by `jmpNow` (phase 2); the
+target is 4 bits, so JMP reaches addresses 0-15 only. OUT loads an 8-bit
+port register from ACC. Every control signal is built from what an
+instruction *should* do, so an instruction is inert for every signal
+it does not drive. From there:
 
 - **ALU op-select** (`alu.op0`/`op1`, matching `buildAluSlice`'s own
   00=ADD/01=AND/10=OR/11=XOR): `op0 = OR(isAni, isXri)`, `op1 = OR(isOri,
@@ -1190,7 +1194,7 @@ them into a clean 2-level tree the way `(bit7, bit6)` used to for 4
 instructions. The first mux picks `imm` (`isLdi`) vs. the ALU's result
 (everything else that writes ACC); the second overrides that with the
 bus's current reading whenever `isLoad`. Neither stage's output is ever
-latched for STORE or the reserved pattern (`accWeGate` is 0 for both), so
+latched for STORE, JMP or OUT (`accWeGate` is 0 for all three), so
 what they compute in those cases doesn't matter.
 
 **Three real bugs, all caught before this instruction set's test ever
@@ -4815,14 +4819,9 @@ section's own success story.
   does. There's no indirect or indexed addressing (an address computed
   from ACC, or ACC plus an offset) — every memory access's target is a
   constant baked into the instruction at program-authoring time, not
-  something the running program can compute. The reserved pattern (`111`)
-  stays genuinely reserved — the decoder produces a `lines[7]` for it like
-  any other pattern, and by construction every control signal in
-  `buildMinimalCpu` is built from the *other* seven lines, so `111`
-  matching none of them is what makes it inert — but unlike every other
-  pattern, this specific one isn't exercised by `blocks.test.ts`'s own
-  program, so "inert" here is a design argument, not something verified
-  end-to-end the way LDI through LOAD each are.
+  something the running program can compute. There is no conditional jump,
+  so a program cannot wait on a counter: a loop's period is its length in
+  instructions.
 - `buildMinimalCpu`'s own test takes 70-90+ seconds — noticeably slower
   than every earlier composite's test, for the unsurprising reason that
   it's the largest circuit `tickHierarchical`-style tests have flattened

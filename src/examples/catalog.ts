@@ -33,6 +33,7 @@ import labSoftRam from '../../examples/lab-soft-ram.json';
 import nandGate from '../../examples/nand-gate.json';
 import romViewer from '../../examples/rom-viewer.json';
 import xorPulse from '../../examples/xor-pulse.json';
+import { buildTinyCpuBlinkProject } from './tinyCpuBlink.js';
 
 export type ExampleGroup = 'Basics' | 'Soft Lab' | 'Memory';
 
@@ -227,6 +228,15 @@ export const EXAMPLE_PROJECTS: ExampleProject[] = [
     detail: 'PC + Soft RAM + ALU4 + REG8 Soft Lab datapath',
     group: 'Soft Lab',
     project: labMiniCpu as SerializedProject,
+  },
+  {
+    id: 'tiny-cpu-blink',
+    title: 'Tiny CPU blinker',
+    detail: 'Folded Tiny CPU runs LDI/OUT/XRI/OUT/JMP from RAM — release RESET, OUT0 blinks',
+    group: 'Memory',
+    get project() {
+      return buildTinyCpuBlinkProject();
+    },
   },
   {
     id: 'lab-analyzer',

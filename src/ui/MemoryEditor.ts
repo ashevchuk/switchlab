@@ -5,7 +5,7 @@
  */
 
 import { assemble, bytesToHexPrompt } from '../machine/assembler.js';
-import { disassemble, formatDisasmLine } from '../machine/disassembler.js';
+import { disassemble, formatDisasmLine, type DisasmLine } from '../machine/disassembler.js';
 import type { MemoryComponent } from '../sim/types.js';
 import { FloatingWindow } from './FloatingWindow.js';
 
@@ -58,6 +58,7 @@ export class MemoryEditor {
   private readonly win: FloatingWindow;
   readonly root: HTMLElement;
   private mem: MemoryComponent | null = null;
+  private disassembler: ((bytes: Uint8Array, addr: number, count: number) => DisasmLine[]) | null = null;
   private readonly addrEl: HTMLInputElement;
   private readonly statusEl: HTMLElement;
   private readonly viewEl: HTMLElement;
@@ -187,6 +188,17 @@ export class MemoryEditor {
     return next !== prev;
   }
 
+  /** Replace the Z80 disassembly pane with another instruction set; null restores Z80. */
+  setDisassembler(fn: ((bytes: Uint8Array, addr: number, count: number) => DisasmLine[]) | null): void {
+    if (fn === this.disassembler) return;
+    this.disassembler = fn;
+    this.refreshDisasm();
+  }
+
+  get memory(): MemoryComponent | null {
+    return this.mem;
+  }
+
   get attached(): boolean {
     return this.mem !== null;
   }
@@ -263,7 +275,9 @@ export class MemoryEditor {
     // jumps outside the current window so Follow PC stays readable.
     const origin =
       this.followPcEl.checked && this.livePc != null ? this.livePc : this.cursor;
-    const lines = disassemble(this.mem.bytes, origin, { count: DISASM_COUNT });
+    const lines = this.disassembler
+      ? this.disassembler(this.mem.bytes, origin, DISASM_COUNT)
+      : disassemble(this.mem.bytes, origin, { count: DISASM_COUNT });
     this.disasmEl.replaceChildren();
     for (const d of lines) {
       const row = document.createElement('div');

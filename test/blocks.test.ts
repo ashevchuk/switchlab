@@ -726,6 +726,76 @@ describe('buildMinimalCpu — FETCH/INCREMENT/DECODE_EXECUTE, running a tiny rea
   });
 });
 
+describe('buildMinimalCpu — JMP and OUT in the formerly reserved 111 slot', () => {
+  /**
+   *   0x01 = 000_00001 -> LDI 1    ACC <- 1
+   *   0xF0 = 111_10000 -> OUT      port <- ACC
+   *   0x81 = 100_00001 -> XRI 1    ACC <- ACC ^ 1
+   *   0xE0 = 111_00000 -> JMP 0    PC <- 0
+   * Port value after each executed instruction; the first one is the
+   * register's power-up state and is not asserted.
+   */
+  const PROGRAM = Uint8Array.of(0x01, 0xf0, 0x81, 0xf0, 0xe0);
+  const EXPECTED_PORT_AFTER = [undefined, 1, 1, 0, 0, 0, 1, 1];
+  const EXPECTED_PC_AFTER_JMP = 0;
+
+  function fromBits(bits: Level[]): number {
+    return bits.reduce<number>((acc, b, i) => acc + (b === 1 ? 1 << i : 0), 0);
+  }
+
+  it('loops the program: OUT drives the port register, JMP reloads PC', () => {
+    const library = new ChipLibrary();
+    const parent = new Circuit();
+    const cpu = buildMinimalCpu(parent, library, 4, PROGRAM);
+
+    const resetPulse = makeInput(parent, 1);
+    wire(parent, resetPulse.pins.out, cpu.reset);
+    const dataClk = makeInput(parent, 0);
+    wire(parent, dataClk.pins.out, cpu.clk);
+    const phaseClk = makeInput(parent, 0);
+    wire(parent, phaseClk.pins.out, cpu.phaseClk);
+    const fsmLoad = makeInput(parent, 1);
+    wire(parent, fsmLoad.pins.out, cpu.fsmLoad);
+    const fsmD0 = makeInput(parent, 1);
+    wire(parent, fsmD0.pins.out, cpu.fsmD[0]!);
+    const fsmD1 = makeInput(parent, 0);
+    wire(parent, fsmD1.pins.out, cpu.fsmD[1]!);
+    const fsmD2 = makeInput(parent, 0);
+    wire(parent, fsmD2.pins.out, cpu.fsmD[2]!);
+
+    let state = initialState();
+    let netMap!: NetMap;
+    const tick = () => ({ state, netMap } = tickHierarchical(parent, library, state));
+    const pulse = (sig: { value: 0 | 1 }) => {
+      sig.value = 1;
+      tick();
+      sig.value = 0;
+      tick();
+    };
+    const readPort = () => fromBits(cpu.out.map((q) => levelAt(state, netMap, q.id)));
+    const readPc = () => fromBits(cpu.pc.map((q) => levelAt(state, netMap, q.id)));
+
+    tick();
+    pulse(phaseClk);
+    fsmLoad.value = 0;
+    pulse(dataClk);
+    resetPulse.value = 0;
+    pulse(dataClk);
+
+    for (let i = 0; i < EXPECTED_PORT_AFTER.length; i++) {
+      pulse(phaseClk);
+      pulse(dataClk);
+      pulse(phaseClk);
+      pulse(dataClk);
+      const expected = EXPECTED_PORT_AFTER[i];
+      if (expected !== undefined) expect(readPort(), `port after instruction ${i}`).toBe(expected);
+      if (i === 4) expect(readPc()).toBe(EXPECTED_PC_AFTER_JMP);
+      pulse(phaseClk);
+      pulse(dataClk);
+    }
+  });
+});
+
 describe('buildZ80Decoder — real Z80 opcode field extraction (x/y/z)', () => {
   /**
    * Checked directly against real, well-known opcode bytes from an actual
