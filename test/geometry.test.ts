@@ -9,6 +9,7 @@ import {
   pathOverlapLength,
   pinExitDir,
   pinRouteDir,
+  rawWirePolyline,
   routeAStar,
   routeWirePoints,
   simplifyOrthoPath,
@@ -252,5 +253,53 @@ describe('routeWirePoints obstacles', () => {
         expect(pathOverlapLength(paths[i]!, [paths[j]!])).toBe(0);
       }
     }
+  });
+});
+
+describe('rawWirePolyline', () => {
+  it('runs from the first pin through the waypoints to the second', () => {
+    const circuit = new Circuit();
+    const input = makeInput(circuit, 0, { x: 0, y: 0 });
+    const probe = makeProbe(circuit, { x: 200, y: 100 });
+    const w = circuit.addWire(input.pins.out.id, probe.pins.in.id);
+    w.waypoints = [{ x: 100, y: 0 }];
+
+    expect(rawWirePolyline(circuit, w)).toEqual([input.pins.out.pos, { x: 100, y: 0 }, probe.pins.in.pos]);
+  });
+
+  it('still finds a pin whose record key no longer matches the name in its id', () => {
+    const circuit = new Circuit();
+    const input = makeInput(circuit, 0, { x: 0, y: 0 });
+    const probe = makeProbe(circuit, { x: 200, y: 100 });
+    const w = circuit.addWire(input.pins.out.id, probe.pins.in.id);
+    const pin = probe.pins.in;
+    delete (probe.pins as Record<string, unknown>).in;
+    (probe.pins as Record<string, unknown>).renamed = pin;
+
+    expect(rawWirePolyline(circuit, w)).toEqual([input.pins.out.pos, pin.pos]);
+  });
+
+  it('returns undefined when an end pin is gone', () => {
+    const circuit = new Circuit();
+    const input = makeInput(circuit, 0, { x: 0, y: 0 });
+    const probe = makeProbe(circuit, { x: 200, y: 100 });
+    const w = circuit.addWire(input.pins.out.id, probe.pins.in.id);
+    circuit.components.delete(probe.id);
+
+    expect(rawWirePolyline(circuit, w)).toBeUndefined();
+  });
+
+  it('does not rescan every pin of the circuit for each wire', () => {
+    const circuit = new Circuit();
+    const wires = [];
+    for (let i = 0; i < 3000; i++) {
+      const input = makeInput(circuit, 0, { x: 0, y: i * 10 });
+      const probe = makeProbe(circuit, { x: 100, y: i * 10 });
+      wires.push(circuit.addWire(input.pins.out.id, probe.pins.in.id));
+    }
+    const started = performance.now();
+    for (const w of wires) rawWirePolyline(circuit, w);
+    // 3000 full rescans of 6000 pins take seconds; direct lookups take milliseconds.
+    expect(performance.now() - started).toBeLessThan(500);
   });
 });

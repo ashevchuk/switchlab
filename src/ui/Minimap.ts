@@ -130,8 +130,8 @@ export class Minimap {
     ctx.strokeStyle = '#5b6272';
     ctx.lineWidth = 1;
     for (const wire of circuit.wires.values()) {
-      const a = [...circuit.allPins()].find((p) => p.id === wire.a);
-      const bp = [...circuit.allPins()].find((p) => p.id === wire.b);
+      const a = circuit.findPin(wire.a);
+      const bp = circuit.findPin(wire.b);
       if (!a || !bp) continue;
       ctx.beginPath();
       ctx.moveTo(toX(a.pos.x), toY(a.pos.y));

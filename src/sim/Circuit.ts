@@ -146,6 +146,12 @@ export class Circuit {
     bumpStructureVersion();
   }
 
+  /** Pin ids are `<componentId>:<name>`, so the owner is found directly; the name may be stale after a port rename, hence the scan of its own pins. */
+  findPin(pinId: string): Pin | undefined {
+    const owner = this.components.get(pinId.slice(0, pinId.indexOf(':')));
+    return (owner && (Object.values(owner.pins) as Pin[]).find((p) => p.id === pinId)) ?? this.allPins().find((p) => p.id === pinId);
+  }
+
   allPins(): Pin[] {
     const pins: Pin[] = [];
     for (const c of this.components.values()) {

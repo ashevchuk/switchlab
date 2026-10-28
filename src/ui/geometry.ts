@@ -1236,10 +1236,8 @@ export function busPassBitAt(c: BusPassComponent, p: Point, radius = 10): number
 
 /** Stored wire polyline (pin → waypoints → pin), before orthogonal expansion. */
 export function rawWirePolyline(circuit: Circuit, wire: Wire): Point[] | undefined {
-  const pinById = new Map<string, Point>();
-  for (const p of circuit.allPins()) pinById.set(p.id, p.pos);
-  const a = pinById.get(wire.a);
-  const b = pinById.get(wire.b);
+  const a = circuit.findPin(wire.a)?.pos;
+  const b = circuit.findPin(wire.b)?.pos;
   if (!a || !b) return undefined;
   return wire.waypoints && wire.waypoints.length ? [a, ...wire.waypoints, b] : [a, b];
 }
