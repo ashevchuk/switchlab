@@ -1252,7 +1252,9 @@ function flattenLevel(circuit: Circuit, library: ChipLibrary, nsPrefix: string):
     // RAM `.bytes` is already aliased by cloneComponent. Writes during
     // step() must remain visible after the next flatten — see ARCHITECTURE.md
     // "Real RAM". StructuredClone used to copy the Uint8Array; we never do.
-    if (c.kind === 'source' || c.kind === 'input' || c.kind === 'button' || c.kind === 'clock' || c.kind === 'busswitch') {
+    // A Source's value is part of the netlist (it names the VCC/GND net), so editing one
+    // bumps the structure version instead of being re-copied on every flatten.
+    if (c.kind === 'input' || c.kind === 'button' || c.kind === 'clock' || c.kind === 'busswitch') {
       outLiveValuePairs.push({
         original: c,
         clone: clone as SourceComponent | InputComponent | ButtonComponent | ClockComponent | BusSwitchComponent,

@@ -683,6 +683,7 @@ export class ObjectInspector {
           (v) => {
             this.noteEdit();
             c.value = v === '1' ? 1 : 0;
+            if (c.kind === 'source') bumpStructureVersion();
             this.changed();
           },
         ),
