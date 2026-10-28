@@ -53,7 +53,8 @@ export interface EventStructure {
   transistors: EventTransistor[];
   ramIdx: EventRam[];
   softChips: EventSoftChip[];
-  driverPins: { netIdx: number; comp: { value: 0 | 1 } }[];
+  /** `fixed` drivers (Sources) keep their value for the life of the structure. */
+  driverPins: { netIdx: number; comp: { value: 0 | 1 }; fixed?: boolean }[];
 }
 
 export interface EventRelaxed {
@@ -167,8 +168,23 @@ class Engine {
   private readonly drv: Uint8Array;
   private readonly drvNew: Uint8Array;
   private readonly ext: Uint8Array;
-  private readonly extOld: Uint8Array;
-  private extTouched: number[] = [];
+  private readonly extCount0: Int32Array;
+  private readonly extCount1: Int32Array;
+  private readonly extStamp: Int32Array;
+  private externalStamp = 0;
+  /** RAM/ROM devices first, then Soft Lab chips. */
+  private readonly deviceCount: number;
+  private readonly deviceInputStart: Int32Array;
+  private readonly deviceInputList: Int32Array;
+  private readonly deviceDirty: Uint8Array;
+  private dirtyDevices: number[] = [];
+  private readonly deviceNets: number[][] = [];
+  private readonly deviceBits: number[][] = [];
+  /** Drivers that can change between ticks, and the nets they sit on. */
+  private readonly liveDrivers: EventStructure['driverPins'];
+  private readonly liveDrivenNets: Int32Array;
+  /** What the fixed drivers and the implicit VCC/GND nets force, by net. */
+  private readonly fixedDrv: Uint8Array;
 
   // Hub bookkeeping: which nets are tied to each hub, and what they force on it.
   private readonly att: Int32Array;
@@ -294,12 +310,40 @@ class Engine {
     this.lastValue = new Uint8Array(K).fill(NO_VALUE);
     this.lastContended = new Uint8Array(K);
 
+    const deviceInputs: number[][] = [];
+    for (const r of s.ramIdx) deviceInputs.push([r.oe, ...(r.we >= 0 ? [r.we] : []), ...r.addr]);
+    for (const sc of s.softChips) {
+      deviceInputs.push(Object.values(sc.pinNet).filter((net): net is number => net !== undefined));
+    }
+    this.deviceCount = deviceInputs.length;
+    const inputStart = new Int32Array(n + 1);
+    for (const nets of deviceInputs) for (const net of new Set(nets)) inputStart[net + 1]!++;
+    for (let i = 0; i < n; i++) inputStart[i + 1]! += inputStart[i]!;
+    this.deviceInputStart = inputStart;
+    this.deviceInputList = new Int32Array(inputStart[n]!);
+    const inputFill = new Int32Array(n);
+    deviceInputs.forEach((nets, device) => {
+      for (const net of new Set(nets)) this.deviceInputList[inputStart[net]! + inputFill[net]!++] = device;
+    });
+    this.deviceDirty = new Uint8Array(this.deviceCount);
+    for (let d = 0; d < this.deviceCount; d++) {
+      this.deviceNets.push([]);
+      this.deviceBits.push([]);
+    }
+    this.fixedDrv = new Uint8Array(n);
+    for (const d of s.driverPins) if (d.fixed) this.fixedDrv[d.netIdx]! |= d.comp.value === 1 ? 2 : 1;
+    for (const net of this.implicitRails) this.fixedDrv[net]! |= s.netIds[net] === 'VCC' ? 2 : 1;
+    this.liveDrivers = s.driverPins.filter((d) => !d.fixed);
+    this.liveDrivenNets = Int32Array.from(new Set(this.liveDrivers.map((d) => d.netIdx)));
+
     this.cur = new Uint8Array(n);
     this.conducts = new Uint8Array(T);
     this.drv = new Uint8Array(n);
     this.drvNew = new Uint8Array(n);
     this.ext = new Uint8Array(n);
-    this.extOld = new Uint8Array(n);
+    this.extCount0 = new Int32Array(n);
+    this.extCount1 = new Int32Array(n);
+    this.extStamp = new Int32Array(n);
     this.att = new Int32Array(n);
     this.contrib = new Uint8Array(n);
     this.contFlag = new Uint8Array(n);
@@ -322,10 +366,14 @@ class Engine {
     const ids = this.s.netIds;
     for (let i = 0; i < n; i++) this.cur[i] = code(prevLevelOf.get(ids[i]!));
     for (let t = 0; t < this.conducts.length; t++) this.conducts[t] = this.conductsNow(t);
-    this.drv.fill(0);
+    this.drv.set(this.fixedDrv);
     this.ext.fill(0);
-    this.extOld.fill(0);
-    this.extTouched = [];
+    this.extCount0.fill(0);
+    this.extCount1.fill(0);
+    for (let d = 0; d < this.deviceCount; d++) {
+      this.deviceNets[d]!.length = 0;
+      this.deviceBits[d]!.length = 0;
+    }
     this.att.fill(0);
     this.contrib.fill(0);
     this.cnt0.fill(0);
@@ -350,63 +398,95 @@ class Engine {
   }
 
   private refreshDrivers(): void {
-    const { drvNew, drv } = this;
-    drvNew.fill(0);
-    for (const d of this.s.driverPins) drvNew[d.netIdx]! |= d.comp.value === 1 ? 2 : 1;
-    for (const net of this.implicitRails) drvNew[net]! |= this.s.netIds[net] === 'VCC' ? 2 : 1;
-    for (let i = 0; i < this.n; i++) {
-      if (drvNew[i] !== drv[i]) {
-        drv[i] = drvNew[i]!;
-        this.pending.push(i);
+    const { drvNew, drv, fixedDrv, liveDrivenNets } = this;
+    for (const net of liveDrivenNets) drvNew[net] = fixedDrv[net]!;
+    for (const d of this.liveDrivers) drvNew[d.netIdx]! |= d.comp.value === 1 ? 2 : 1;
+    for (const net of liveDrivenNets) {
+      if (drvNew[net] !== drv[net]) {
+        drv[net] = drvNew[net]!;
+        this.pending.push(net);
       }
     }
   }
 
-  /** RAM/ROM read forces and Soft Lab chip outputs for this pass, from the levels at the start of the pass. */
+  /** Memory contents and Soft Lab state change between ticks, so every device is read again at the start of a tick. */
+  private markAllDevicesDirty(): void {
+    this.dirtyDevices = [];
+    for (let d = 0; d < this.deviceCount; d++) {
+      this.deviceDirty[d] = 1;
+      this.dirtyDevices.push(d);
+    }
+  }
+
+  private markDevicesReading(net: number): void {
+    for (let k = this.deviceInputStart[net]!; k < this.deviceInputStart[net + 1]!; k++) {
+      const device = this.deviceInputList[k]!;
+      if (this.deviceDirty[device]) continue;
+      this.deviceDirty[device] = 1;
+      this.dirtyDevices.push(device);
+    }
+  }
+
+  /** RAM/ROM read forces and Soft Lab chip outputs, re-read only for devices whose inputs changed. */
   private refreshExternal(work: number[]): void {
-    const { ext, extOld, cur } = this;
-    const oldTouched = this.extTouched;
-    for (const net of oldTouched) {
-      extOld[net] = ext[net]!;
-      ext[net] = 0;
+    const dirty = this.dirtyDevices;
+    this.dirtyDevices = [];
+    if (dirty.length === 0) return;
+    const touched: number[] = [];
+    this.externalStamp++;
+    const ramCount = this.s.ramIdx.length;
+    for (const device of dirty) {
+      this.deviceDirty[device] = 0;
+      const nets = this.deviceNets[device]!;
+      const bits = this.deviceBits[device]!;
+      for (let i = 0; i < nets.length; i++) this.changeExternal(nets[i]!, bits[i]!, -1, touched);
+      nets.length = 0;
+      bits.length = 0;
+      const emit = (net: number, bit: 0 | 1): void => {
+        nets.push(net);
+        bits.push(bit);
+        this.changeExternal(net, bit, 1, touched);
+      };
+      if (device < ramCount) this.readMemory(this.s.ramIdx[device]!, emit);
+      else this.driveSoftChip(this.s.softChips[device - ramCount]!, emit);
     }
-    const newTouched: number[] = [];
-    for (const r of this.s.ramIdx) {
-      if (cur[r.oe] !== ONE) continue;
-      if (r.we >= 0 && cur[r.we] === ONE) continue;
-      let addr = 0;
-      let resolved = true;
-      for (let i = 0; i < r.addr.length; i++) {
-        const level = cur[r.addr[i]!]!;
-        if (level !== ZERO && level !== ONE) {
-          resolved = false;
-          break;
-        }
-        if (level === ONE) addr |= 1 << i;
-      }
-      if (!resolved) continue;
-      const byte = r.mem.bytes[addr] ?? 0;
-      for (let i = 0; i < r.data.length; i++) {
-        const net = r.data[i]!;
-        if (ext[net] === 0) newTouched.push(net);
-        ext[net]! |= ((byte >> i) & 1) === 1 ? 2 : 1;
-      }
+    for (const net of touched) {
+      const forced = (this.extCount0[net]! > 0 ? 1 : 0) | (this.extCount1[net]! > 0 ? 2 : 0);
+      if (forced === this.ext[net]) continue;
+      this.ext[net] = forced;
+      work.push(net);
     }
-    for (const sc of this.s.softChips) {
-      const pinLevels: Record<string, Level> = {};
-      for (const name of sc.pinNames) {
-        const idx = sc.pinNet[name];
-        pinLevels[name] = idx !== undefined ? LEVELS[cur[idx]!]! : 'Z';
-      }
-      softLabDriveOutputs(sc.model, sc.pinNet, pinLevels, sc.state, (net, bit) => {
-        if (ext[net] === 0) newTouched.push(net);
-        ext[net]! |= bit === 1 ? 2 : 1;
-      });
+  }
+
+  private changeExternal(net: number, bit: number, delta: 1 | -1, touched: number[]): void {
+    if (bit === 1) this.extCount1[net]! += delta;
+    else this.extCount0[net]! += delta;
+    if (this.extStamp[net] === this.externalStamp) return;
+    this.extStamp[net] = this.externalStamp;
+    touched.push(net);
+  }
+
+  private readMemory(r: EventRam, emit: (net: number, bit: 0 | 1) => void): void {
+    const { cur } = this;
+    if (cur[r.oe] !== ONE) return;
+    if (r.we >= 0 && cur[r.we] === ONE) return;
+    let addr = 0;
+    for (let i = 0; i < r.addr.length; i++) {
+      const level = cur[r.addr[i]!]!;
+      if (level !== ZERO && level !== ONE) return;
+      if (level === ONE) addr |= 1 << i;
     }
-    for (const net of oldTouched) if (ext[net] !== extOld[net]) work.push(net);
-    for (const net of newTouched) if (extOld[net] === 0) work.push(net);
-    for (const net of oldTouched) extOld[net] = 0;
-    this.extTouched = newTouched;
+    const byte = r.mem.bytes[addr] ?? 0;
+    for (let i = 0; i < r.data.length; i++) emit(r.data[i]!, ((byte >> i) & 1) as 0 | 1);
+  }
+
+  private driveSoftChip(sc: EventSoftChip, emit: (net: number, bit: 0 | 1) => void): void {
+    const pinLevels: Record<string, Level> = {};
+    for (const name of sc.pinNames) {
+      const idx = sc.pinNet[name];
+      pinLevels[name] = idx !== undefined ? LEVELS[this.cur[idx]!]! : 'Z';
+    }
+    softLabDriveOutputs(sc.model, sc.pinNet, pinLevels, sc.state, emit);
   }
 
   private addToList(h: number, net: number): void {
@@ -608,6 +688,7 @@ class Engine {
     for (const net of changed) cur[net] = nxt[net]!;
     for (const net of changed) {
       this.addSeed(net);
+      this.markDevicesReading(net);
       for (let k = this.gatedStart[net]!; k < this.gatedStart[net + 1]!; k++) {
         const t = this.gatedList[k]!;
         const nowConducts = this.conductsNow(t);
@@ -707,6 +788,7 @@ class Engine {
     this.passNo = 0;
     if (prevLevelOf !== this.lastLevelOf) this.reseed(prevLevelOf);
     this.refreshDrivers();
+    this.markAllDevicesDirty();
 
     let iterations = 0;
     let changed = true;

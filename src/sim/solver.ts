@@ -116,7 +116,7 @@ type StepStructureCache = {
   ramIdx: RamIdx[];
   rams: RamComponent[];
   softChips: SoftChipIdx[];
-  driverPins: { netIdx: number; comp: { value: 0 | 1 } }[];
+  driverPins: { netIdx: number; comp: { value: 0 | 1 }; fixed?: boolean }[];
   parent: Int32Array;
   rootOf: Int32Array;
   head: Int32Array;
@@ -158,7 +158,7 @@ function getStepStructure(circuit: Circuit, netMap: NetMap): StepStructureCache 
   const rams: RamComponent[] = [];
   const ramIdx: RamIdx[] = [];
   const softChips: SoftChipIdx[] = [];
-  const driverPins: { netIdx: number; comp: { value: 0 | 1 } }[] = [];
+  const driverPins: { netIdx: number; comp: { value: 0 | 1 }; fixed?: boolean }[] = [];
 
   for (const c of circuit.components.values()) {
     if (c.kind === 'source' || c.kind === 'input' || c.kind === 'button' || c.kind === 'clock') {
@@ -166,7 +166,7 @@ function getStepStructure(circuit: Circuit, netMap: NetMap): StepStructureCache 
       if (!net) continue;
       const i = indexOf.get(net);
       if (i === undefined) continue;
-      driverPins.push({ netIdx: i, comp: c });
+      driverPins.push({ netIdx: i, comp: c, fixed: c.kind === 'source' });
     } else if (c.kind === 'busswitch') {
       for (let bit = 0; bit < c.bitWidth; bit++) {
         const p = c.pins[`b${bit}`];
