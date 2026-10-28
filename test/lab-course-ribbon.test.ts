@@ -15,6 +15,14 @@ describe('Lab course checklist data', () => {
   });
 });
 
+describe('Lab course steps', () => {
+  it('each step names an example in the catalog', async () => {
+    const { EXAMPLE_PROJECTS } = await import('../src/examples/catalog.js');
+    const catalogIds = new Set(EXAMPLE_PROJECTS.map((e) => e.id));
+    expect(LAB_CURRICULUM.filter((s) => !catalogIds.has(s.id)).map((s) => s.id)).toEqual([]);
+  });
+});
+
 describe('Ribbon bus switch → chip', () => {
   it('wires b0.. to a0.. on ADDER4', () => {
     const library = new ChipLibrary();

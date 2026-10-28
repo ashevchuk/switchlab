@@ -576,7 +576,8 @@ const SECTIONS: Section[] = [
       'Foundations: cmos-inverter, nand-gate, and-gate, half-adder, d-latch, xor-pulse, rom-viewer\n' +
       'Soft Lab: lab-counter-7seg, lab-counter-cascade, lab-adder4, lab-alu4, lab-alu8, lab-soft-ram,\n' +
       '  lab-contend-bus, lab-mini-cpu, lab-sipo, lab-piso, lab-decoder, lab-encoder, lab-comp,\n' +
-      '  lab-jk, lab-mux, lab-buf8-oe, lab-latch8, lab-reg8, lab-clkdiv, lab-analyzer\n\n' +
+      '  lab-jk, lab-mux, lab-buf8-oe, lab-latch8, lab-reg8, lab-clkdiv, lab-analyzer\n' +
+      'Gate-level CPU: tiny-cpu-blink\n\n' +
       'Tutorials: Help → Tutorial… / latch / lab counter. Machines: #demo=… / Spectrum Insert.',
     figures: [
       { src: img18, caption: 'nand-gate example.' },

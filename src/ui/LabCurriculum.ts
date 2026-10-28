@@ -95,6 +95,17 @@ export const LAB_CURRICULUM: LabCurriculumStep[] = [
     ],
   },
   {
+    id: 'tiny-cpu-blink',
+    title: 'Tiny CPU blinker',
+    blurb: 'A CPU folded into one chip: PC, IR, ACC, ALU and FSM run a program from RAM.',
+    checklist: [
+      'Release RESET — the OUT0 LED blinks and the bus probe flips 0x00 / 0x01.',
+      'Double-click the RAM, tick Follow PC and watch the disassembly track the program counter.',
+      'Assemble loop: LDI 3 / OUT / LDI 0 / OUT / JMP loop — the bus now flips 0x00 / 0x03.',
+      'Double-click TinyCPU to dive in: PC, IR, ACC, ALU, FSM, OUT and Control are separate chips.',
+    ],
+  },
+  {
     id: 'lab-analyzer',
     title: 'Logic analyzer',
     blurb: 'Arm the LA, set trigger, export VCD/PNG.',
