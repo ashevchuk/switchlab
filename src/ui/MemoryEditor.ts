@@ -54,6 +54,16 @@ function hexByte(b: number): string {
   return b.toString(16).padStart(2, '0');
 }
 
+interface FollowWindow {
+  start: number;
+  addrs: ReadonlySet<number>;
+}
+
+/** Where the Follow PC listing starts: unchanged while the PC is on a listed instruction, else at the PC. */
+export function followWindowStart(window: FollowWindow | null, pc: number): number {
+  return window?.addrs.has(pc) ? window.start : pc;
+}
+
 export interface EditorIsa {
   name: string;
   disassemble: (bytes: Uint8Array, addr: number, count: number) => DisasmLine[];
@@ -65,6 +75,7 @@ export class MemoryEditor {
   readonly root: HTMLElement;
   private mem: MemoryComponent | null = null;
   private isa: EditorIsa | null = null;
+  private followWindow: FollowWindow | null = null;
   private readonly addrEl: HTMLInputElement;
   private readonly statusEl: HTMLElement;
   private readonly viewEl: HTMLElement;
@@ -278,13 +289,14 @@ export class MemoryEditor {
       this.disasmEl.replaceChildren();
       return;
     }
-    // Origin: soft PC when following, else edit cursor. Re-list when origin
-    // jumps outside the current window so Follow PC stays readable.
-    const origin =
-      this.followPcEl.checked && this.livePc != null ? this.livePc : this.cursor;
+    // Origin: the PC when following, else the edit cursor. A followed listing
+    // stays put while the PC moves inside it, so the pane does not jump or resize.
+    const following = this.followPcEl.checked && this.livePc != null;
+    const origin = following ? followWindowStart(this.followWindow, this.livePc!) : this.cursor;
     const lines = this.isa
       ? this.isa.disassemble(this.mem.bytes, origin, DISASM_COUNT)
       : disassemble(this.mem.bytes, origin, { count: DISASM_COUNT });
+    this.followWindow = following ? { start: origin, addrs: new Set(lines.map((d) => d.addr)) } : null;
     this.disasmEl.replaceChildren();
     for (const d of lines) {
       const row = document.createElement('div');
