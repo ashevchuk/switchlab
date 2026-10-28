@@ -3413,6 +3413,15 @@ function readTinyPc(chip: ChipInstanceComponent): number | null {
   return pc;
 }
 
+/**
+ * While a gate-level machine runs, redrawing a 100k-transistor sheet every frame
+ * costs more than the phases themselves. Leave at least this many times the last
+ * redraw's duration between redraws so the solver gets the rest of the time.
+ */
+const GATE_RUN_REDRAW_GAP_FACTOR = 3;
+let lastRedrawMs = 0;
+let lastRedrawEndMs = 0;
+
 function frame(): void {
   syncInspector();
   if (tutorial.active) tutorial.tick(editor.circuit);
@@ -3470,7 +3479,18 @@ function frame(): void {
         // Keep the canvas alive so contended-wire heat animation plays while settled.
         simState.contended.size > 0;
 
-  if (needSimDraw) {
+  const gateRunRedrawDeferred =
+    machineRunner.running &&
+    !machineRunner.isSoft &&
+    !uiDirty &&
+    !simStepOnce &&
+    !labActive &&
+    !hasPulseGen &&
+    !porActive &&
+    performance.now() - lastRedrawEndMs < GATE_RUN_REDRAW_GAP_FACTOR * lastRedrawMs;
+  const redrawStartMs = performance.now();
+
+  if (needSimDraw && !gateRunRedrawDeferred) {
     // Keep backing store in sync even if a layout change slipped past the
     // ResizeObserver (e.g. panel attach in the same turn as a zoom redraw).
     resizeCanvas();
@@ -3613,6 +3633,8 @@ function frame(): void {
     }
     updateSoftLabChrome();
     uiDirty = false;
+    lastRedrawEndMs = performance.now();
+    lastRedrawMs = lastRedrawEndMs - redrawStartMs;
   } else {
     updateSoftLabChrome();
   }
