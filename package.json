@@ -11,6 +11,7 @@
     "build:dist-file": "bash scripts/build-dist-file.sh",
     "gen:examples": "npx vite-node scripts/gen-examples.ts",
     "gen:z80-map": "npx vite-node scripts/z80-signal-map.ts",
+    "bench:solver": "npx vite-node scripts/bench-solver.mts --",
     "gen:spectrum-games": "npx vite-node scripts/gen-spectrum-games.ts",
     "preview": "vite preview",
     "test": "vitest run",
