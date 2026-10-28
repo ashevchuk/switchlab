@@ -38,6 +38,7 @@ import { pruneDuplicateChipNames, seedStandardCells, isStdcellName, STDCELL_NAME
 import { isLabcellName } from './sim/labcells.js';
 import {
   armSoftLabToGatesPor,
+  circuitHasSoftSequentialChips,
   clearSoftExpandForced,
   clearSoftLabPor,
   clearSoftLabState,
@@ -3266,9 +3267,11 @@ document.getElementById('sim-soft-lab')?.addEventListener('click', () => {
     clearSoftLabStateDeep(topCircuit, library);
     flashStatusNotice('Soft Lab — soft state reset');
   }
-  // Always reset sim levels — Soft↔Gates changes the flat netlist shape;
-  // carrying the previous levelOf Map leaves Soft/Gates half-converged.
-  simState = initialState();
+  // Reset sim levels — Soft↔Gates changes the flat netlist shape around Soft
+  // sequential chips; carrying the previous levelOf Map leaves Soft/Gates
+  // half-converged. A design without any keeps its state: wiping it would leave
+  // the latches of a gate-level CPU floating until it is reset.
+  if (circuitHasSoftSequentialChips(topCircuit, library)) simState = initialState();
   // Toggle while dived must re-apply dive expand — otherwise Soft-opaque
   // children (e.g. T_FF under COUNTER4) grey out the schematic (flat nets≈20).
   resyncSoftExpandForCurrentDive();

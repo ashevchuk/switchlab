@@ -431,6 +431,33 @@ export function softLabNeedsGatesPor(chipName: string): boolean {
   return (MODEL_BITS[key] ?? 0) > 0;
 }
 
+/**
+ * True when the circuit, or any chip definition reachable from it, contains a
+ * Soft Lab chip that holds sequential bits. Only such chips change shape when
+ * Soft Lab is toggled; a design without any is the same netlist either way.
+ */
+export function circuitHasSoftSequentialChips(
+  circuit: { components: Map<string, { kind: string; defId?: string }> },
+  library: {
+    has(id: string): boolean;
+    get(id: string): { name: string; circuit: { components: Map<string, { kind: string; defId?: string }> } };
+  },
+): boolean {
+  const visited = new Set<string>();
+  const visit = (c: typeof circuit): boolean => {
+    for (const comp of c.components.values()) {
+      if (comp.kind !== 'chip' || !comp.defId || !library.has(comp.defId)) continue;
+      const def = library.get(comp.defId);
+      if (softLabNeedsGatesPor(def.name)) return true;
+      if (visited.has(comp.defId)) continue;
+      visited.add(comp.defId);
+      if (visit(def.circuit)) return true;
+    }
+    return false;
+  };
+  return visit(circuit);
+}
+
 export function ensureSoftState(chip: ChipInstanceComponent, model: string): SoftLabState {
   const bits = MODEL_BITS[model] ?? 0;
   const q = chip.softState?.q;
