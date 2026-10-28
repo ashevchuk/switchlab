@@ -5,9 +5,11 @@ import {
   softLabCommitEdges,
   softLabDriveOutputs,
   fillSoftLabPorMasks,
+  softLabPorActive,
   tickSoftLabPor,
 } from './softLab.js';
 import type { SoftLabState } from './softLab.js';
+import { adoptLevelOf, eventRelax } from './eventSolver.js';
 import type {
   ChipInstanceComponent,
   Level,
@@ -296,6 +298,28 @@ function getStepStructure(circuit: Circuit, netMap: NetMap): StepStructureCache 
   return built;
 }
 
+/** Result of relaxing one tick, before the post-settle side effects. */
+export interface Relaxed {
+  levelOf: Map<string, Level>;
+  contended: Set<string>;
+  settled: boolean;
+  iterations: number;
+  /** Level of the net with this index (parallel to `getStepStructure(...).netIds`). */
+  levelAt: (netIdx: number) => Level;
+}
+
+export type SolverEngine = 'jacobi' | 'event' | 'shadow';
+
+let engine: SolverEngine = 'jacobi';
+if (typeof process !== 'undefined') {
+  const requested = process.env.SOLVER_ENGINE;
+  if (requested === 'jacobi' || requested === 'event' || requested === 'shadow') engine = requested;
+}
+
+export function setSolverEngine(next: SolverEngine): void {
+  engine = next;
+}
+
 export function step(
   circuit: Circuit,
   netMap: NetMap,
@@ -303,6 +327,62 @@ export function step(
   maxIterations = 64,
 ): SimState {
   const cache = getStepStructure(circuit, netMap);
+  return finishTick(cache, netMap, prev, relax(cache, netMap, prev, maxIterations));
+}
+
+/** POR overrides force nets; only the dense solver models them. */
+function relax(cache: StepStructureCache, netMap: NetMap, prev: SimState, maxIterations: number): Relaxed {
+  if (engine === 'jacobi' || softLabPorActive()) {
+    return jacobiRelax(cache, netMap, prev, maxIterations);
+  }
+  if (engine === 'event') return eventRelax(cache, prev.levelOf, maxIterations);
+  const fast = eventRelax(cache, prev.levelOf, maxIterations);
+  const dense = jacobiRelax(cache, netMap, prev, maxIterations);
+  assertSameRelaxation(cache, fast, dense);
+  adoptLevelOf(cache, dense.levelOf);
+  return dense;
+}
+
+const MISMATCH_REPORT_LIMIT = 8;
+
+function assertSameRelaxation(cache: StepStructureCache, fast: Relaxed, dense: Relaxed): void {
+  const problems: string[] = [];
+  if (fast.iterations !== dense.iterations) problems.push(`iterations ${fast.iterations} != ${dense.iterations}`);
+  if (fast.settled !== dense.settled) problems.push(`settled ${fast.settled} != ${dense.settled}`);
+  let levelMismatches = 0;
+  for (let i = 0; i < cache.netIds.length; i++) {
+    if (fast.levelAt(i) === dense.levelAt(i)) continue;
+    if (levelMismatches++ < MISMATCH_REPORT_LIMIT) {
+      problems.push(`net ${cache.netIds[i]}: event ${fast.levelAt(i)}, dense ${dense.levelAt(i)}`);
+    }
+  }
+  if (levelMismatches > MISMATCH_REPORT_LIMIT) problems.push(`... ${levelMismatches} nets differ in total`);
+  for (let i = 0; i < cache.netIds.length && problems.length > 0 && levelMismatches > 0; i++) {
+    if (fast.levelAt(i) === dense.levelAt(i)) continue;
+    for (const t of cache.transistors) {
+      if (t.drain !== i && t.source !== i && t.gate !== i) continue;
+      const name = (k: number): string => `${cache.netIds[k]}=${dense.levelAt(k)}`;
+      problems.push(`  ${t.isN ? 'N' : 'P'} gate ${name(t.gate)} drain ${name(t.drain)} source ${name(t.source)}`);
+    }
+    break;
+  }
+  const onlyFast = [...fast.contended].filter((id) => !dense.contended.has(id));
+  const onlyDense = [...dense.contended].filter((id) => !fast.contended.has(id));
+  if (onlyFast.length > 0) problems.push(`contended only in event: ${onlyFast.slice(0, MISMATCH_REPORT_LIMIT).join(', ')}`);
+  if (onlyDense.length > 0) problems.push(`contended only in dense: ${onlyDense.slice(0, MISMATCH_REPORT_LIMIT).join(', ')}`);
+  if (problems.length > 0) throw new Error(`Event solver diverged from the dense solver:\n${problems.join('\n')}`);
+}
+
+/** RAM writes, key-clear on read, Soft Lab edge commits and the POR counter: exactly once per tick. */
+function finishTick(cache: StepStructureCache, netMap: NetMap, prev: SimState, r: Relaxed): SimState {
+  applyRamWrites(cache.rams, netMap, prev.levelOf, r.levelOf);
+  applyRamKeyClearOnRead(cache.rams, netMap, r.levelOf);
+  applySoftLabEdges(cache.softChips, r.levelAt);
+  tickSoftLabPor();
+  return { levelOf: r.levelOf, contended: r.contended, settled: r.settled, iterations: r.iterations };
+}
+
+function jacobiRelax(cache: StepStructureCache, netMap: NetMap, prev: SimState, maxIterations: number): Relaxed {
   const {
     netIds,
     transistors,
@@ -563,20 +643,15 @@ export function step(
   const contended = new Set<string>();
   for (const i of contendedIdx) contended.add(netIds[i]!);
 
-  applyRamWrites(rams, netMap, prev.levelOf, levelOf);
-  applyRamKeyClearOnRead(rams, netMap, levelOf);
-  applySoftLabEdges(softChips, cur);
-  tickSoftLabPor();
-
-  return { levelOf, contended, settled: !changed, iterations };
+  return { levelOf, contended, settled: !changed, iterations, levelAt: (i) => cur[i] ?? 'Z' };
 }
 
-function applySoftLabEdges(softChips: SoftChipIdx[], cur: Level[]): void {
+function applySoftLabEdges(softChips: SoftChipIdx[], levelAt: (netIdx: number) => Level): void {
   for (const sc of softChips) {
     const pinLevels: Record<string, Level> = {};
     for (const name of sc.pinNames) {
       const idx = sc.pinNet[name];
-      pinLevels[name] = idx !== undefined ? (cur[idx] ?? 'Z') : 'Z';
+      pinLevels[name] = idx !== undefined ? levelAt(idx) : 'Z';
     }
     softLabCommitEdges(sc.model, pinLevels, sc.state);
   }
