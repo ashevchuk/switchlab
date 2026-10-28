@@ -54,6 +54,13 @@ function hexByte(b: number): string {
   return b.toString(16).padStart(2, '0');
 }
 
+/** Rows of the hex view to build for a scroll position, which is stale when a smaller memory replaces a scrolled one. */
+export function hexRowWindow(scrollTop: number, viewHeight: number, totalRows: number): { first: number; count: number } {
+  const first = Math.min(Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN), totalRows - 1);
+  const count = Math.max(1, Math.min(totalRows - first, Math.ceil(viewHeight / ROW_H) + OVERSCAN * 2));
+  return { first, count };
+}
+
 interface FollowWindow {
   start: number;
   addrs: ReadonlySet<number>;
@@ -377,8 +384,7 @@ export class MemoryEditor {
     this.spacerEl.style.height = `${totalRows * ROW_H}px`;
 
     const viewH = this.viewEl.clientHeight || ROW_H * 16;
-    const first = Math.max(0, Math.floor(this.viewEl.scrollTop / ROW_H) - OVERSCAN);
-    const count = Math.min(totalRows - first, Math.ceil(viewH / ROW_H) + OVERSCAN * 2);
+    const { first, count } = hexRowWindow(this.viewEl.scrollTop, viewH, totalRows);
 
     // Reuse DOM rows when possible.
     while (this.rowsEl.childElementCount > count) this.rowsEl.lastElementChild!.remove();
