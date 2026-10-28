@@ -91,7 +91,7 @@ export class MemoryEditor {
   private readonly followPcEl: HTMLInputElement;
   private onChange: (() => void) | null = null;
   /** Soft machine: JP @addr + reboot/run after Assemble+Go. */
-  private onGo: ((addr: number) => void) | null = null;
+  private onGo: ((addr: number, mem: MemoryComponent) => boolean) | null = null;
 
   private cursor = 0;
   /** Soft PC highlight (null = off). Independent of edit cursor unless Follow PC. */
@@ -187,7 +187,8 @@ export class MemoryEditor {
     this.onChange = fn;
   }
 
-  setOnGo(fn: ((addr: number) => void) | null): void {
+  /** The hook returns false when no running machine uses this memory. */
+  setOnGo(fn: ((addr: number, mem: MemoryComponent) => boolean) | null): void {
     this.onGo = fn;
   }
 
@@ -356,8 +357,7 @@ export class MemoryEditor {
     this.onChange?.();
     if (go) {
       if (this.isa) this.statusEl.textContent += ` · Go is Z80-only (${this.isa.name} bytes loaded)`;
-      else if (this.onGo) this.onGo(addr);
-      else this.statusEl.textContent += ' · no machine Go hook (bytes loaded)';
+      else if (!this.onGo?.(addr, this.mem)) this.statusEl.textContent += ' · no machine runs this memory (bytes loaded)';
     }
   }
 

@@ -579,9 +579,9 @@ function syncInspector(): void {
 memoryEditor.setOnChange(() => {
   uiDirty = true;
 });
-memoryEditor.setOnGo((addr) => {
+memoryEditor.setOnGo((addr, mem) => {
   const ram = machineRunner.machineRam;
-  if (!ram) return;
+  if (!ram || ram !== mem) return false;
   const g = runSoftCommand(ram.bytes, `G ${addr.toString(16)}`);
   if (g.reboot) {
     machineRunner.reboot();
@@ -589,6 +589,7 @@ memoryEditor.setOnGo((addr) => {
   }
   machinePanel.draw();
   machinePanel.refreshControls();
+  return true;
 });
 logicAnalyzer.setOnRunChange(() => {
   uiDirty = true;
