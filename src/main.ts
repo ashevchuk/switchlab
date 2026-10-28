@@ -2,7 +2,7 @@ import { buildAlu, buildInstructionRegister, buildProgramCounter, buildRegister,
 import { ChipLibrary } from './sim/ChipLibrary.js';
 import { bumpStructureVersion, Circuit, currentStructureVersion } from './sim/Circuit.js';
 import { addBlinkBench, TINY_CPU_BLINK_HEX } from './examples/tinyCpuBlink.js';
-import { disassembleTiny } from './machine/tinyDisassembler.js';
+import { TINY_EDITOR_ISA } from './machine/tinyEditorIsa.js';
 import { placeTinyCpu, tinyCpuForRam, tinyPcPins } from './sim/foldTinyCpu.js';
 import { foldZ80CpuLeavingRam, newComponentIdSet, packFoldedMachine } from './sim/foldZ80.js';
 import { replaceLongWiresWithLabels } from './sim/labelWires.js';
@@ -3428,7 +3428,7 @@ function frame(): void {
   }
   if (memoryEditor.attached) {
     const tinyCpu = memoryEditor.memory?.kind === 'ram' ? tinyCpuForRam(topCircuit, library, memoryEditor.memory) : undefined;
-    memoryEditor.setDisassembler(tinyCpu ? disassembleTiny : null);
+    memoryEditor.setIsa(tinyCpu ? TINY_EDITOR_ISA : null);
     const soft = machineRunner.isSoft ? machineRunner.softCpu : null;
     const pc = tinyCpu ? readTinyPc(tinyCpu) : soft ? soft.pc & 0xffff : null;
     if (memoryEditor.setLivePc(pc) && (tinyCpu || soft)) machineWorked = true;

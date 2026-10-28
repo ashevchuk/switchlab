@@ -4,7 +4,7 @@
  * Pure parse/format helpers stay exported for unit tests / file I/O.
  */
 
-import { assemble, bytesToHexPrompt } from '../machine/assembler.js';
+import { assemble, bytesToHexPrompt, type AssembleResult } from '../machine/assembler.js';
 import { disassemble, formatDisasmLine, type DisasmLine } from '../machine/disassembler.js';
 import type { MemoryComponent } from '../sim/types.js';
 import { FloatingWindow } from './FloatingWindow.js';
@@ -54,11 +54,17 @@ function hexByte(b: number): string {
   return b.toString(16).padStart(2, '0');
 }
 
+export interface EditorIsa {
+  name: string;
+  disassemble: (bytes: Uint8Array, addr: number, count: number) => DisasmLine[];
+  assemble: (source: string, origin: number) => AssembleResult;
+}
+
 export class MemoryEditor {
   private readonly win: FloatingWindow;
   readonly root: HTMLElement;
   private mem: MemoryComponent | null = null;
-  private disassembler: ((bytes: Uint8Array, addr: number, count: number) => DisasmLine[]) | null = null;
+  private isa: EditorIsa | null = null;
   private readonly addrEl: HTMLInputElement;
   private readonly statusEl: HTMLElement;
   private readonly viewEl: HTMLElement;
@@ -188,10 +194,11 @@ export class MemoryEditor {
     return next !== prev;
   }
 
-  /** Replace the Z80 disassembly pane with another instruction set; null restores Z80. */
-  setDisassembler(fn: ((bytes: Uint8Array, addr: number, count: number) => DisasmLine[]) | null): void {
-    if (fn === this.disassembler) return;
-    this.disassembler = fn;
+  /** Replace the Z80 assembler and disassembly pane with another instruction set; null restores Z80. */
+  setIsa(isa: EditorIsa | null): void {
+    if (isa === this.isa) return;
+    this.isa = isa;
+    this.asmEl.placeholder = `; ${isa?.name ?? 'Z80'} asm — Assemble loads at @`;
     this.refreshDisasm();
   }
 
@@ -275,8 +282,8 @@ export class MemoryEditor {
     // jumps outside the current window so Follow PC stays readable.
     const origin =
       this.followPcEl.checked && this.livePc != null ? this.livePc : this.cursor;
-    const lines = this.disassembler
-      ? this.disassembler(this.mem.bytes, origin, DISASM_COUNT)
+    const lines = this.isa
+      ? this.isa.disassemble(this.mem.bytes, origin, DISASM_COUNT)
       : disassemble(this.mem.bytes, origin, { count: DISASM_COUNT });
     this.disasmEl.replaceChildren();
     for (const d of lines) {
@@ -309,7 +316,7 @@ export class MemoryEditor {
       return;
     }
     const addr = Math.min(this.parseAddr(), this.mem.bytes.length - 1);
-    const result = assemble(this.asmEl.value, addr);
+    const result = this.isa ? this.isa.assemble(this.asmEl.value, addr) : assemble(this.asmEl.value, addr);
     if (!result.ok) {
       this.statusEl.textContent = result.errors[0] ?? 'assemble failed';
       this.disasmEl.replaceChildren();
@@ -329,7 +336,8 @@ export class MemoryEditor {
     this.statusEl.textContent = `assembled ${n} bytes @ ${addr.toString(16).padStart(4, '0')} (${bytesToHexPrompt(result.bytes).slice(0, 48)}${result.bytes.length > 16 ? '…' : ''})`;
     this.onChange?.();
     if (go) {
-      if (this.onGo) this.onGo(addr);
+      if (this.isa) this.statusEl.textContent += ` · Go is Z80-only (${this.isa.name} bytes loaded)`;
+      else if (this.onGo) this.onGo(addr);
       else this.statusEl.textContent += ' · no machine Go hook (bytes loaded)';
     }
   }
