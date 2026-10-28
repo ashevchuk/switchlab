@@ -49,6 +49,7 @@ export interface EventSoftChip {
 
 export interface EventStructure {
   netIds: string[];
+  indexOf: Map<string, number>;
   transistors: EventTransistor[];
   ramIdx: EventRam[];
   softChips: EventSoftChip[];
@@ -74,6 +75,66 @@ const NO_VALUE = 255;
 const HUB_MIN_DEGREE = 32;
 /** Hub membership is a bit mask in an Int32. */
 const MAX_HUBS = 30;
+
+/**
+ * Read-only `Map<netId, Level>` over a snapshot of one tick's levels. Building a
+ * real Map of every net on every tick cost a quarter of the Z80 tick; callers
+ * only look nets up by id, so the snapshot is a typed array copy plus the shared
+ * id to index table.
+ */
+export class LevelView extends Map<string, Level> {
+  constructor(
+    private readonly indexOf: Map<string, number>,
+    private readonly codes: Uint8Array,
+  ) {
+    super();
+  }
+
+  override get(netId: string): Level | undefined {
+    const index = this.indexOf.get(netId);
+    return index === undefined ? undefined : LEVELS[this.codes[index]!];
+  }
+
+  override has(netId: string): boolean {
+    return this.indexOf.has(netId);
+  }
+
+  override get size(): number {
+    return this.indexOf.size;
+  }
+
+  override set(): never {
+    throw new Error('A solver level snapshot is read-only');
+  }
+
+  override delete(): never {
+    throw new Error('A solver level snapshot is read-only');
+  }
+
+  override clear(): never {
+    throw new Error('A solver level snapshot is read-only');
+  }
+
+  override *entries(): MapIterator<[string, Level]> {
+    for (const [netId, index] of this.indexOf) yield [netId, LEVELS[this.codes[index]!]!];
+  }
+
+  override *keys(): MapIterator<string> {
+    yield* this.indexOf.keys();
+  }
+
+  override *values(): MapIterator<Level> {
+    for (const index of this.indexOf.values()) yield LEVELS[this.codes[index]!]!;
+  }
+
+  override [Symbol.iterator](): MapIterator<[string, Level]> {
+    return this.entries();
+  }
+
+  override forEach(callback: (level: Level, netId: string, map: Map<string, Level>) => void): void {
+    for (const [netId, level] of this.entries()) callback(level, netId, this);
+  }
+}
 
 function code(level: Level | undefined): number {
   return level === 0 ? ZERO : level === 1 ? ONE : Z;
@@ -654,9 +715,8 @@ class Engine {
       changed = this.pass();
     }
 
-    const levelOf = new Map<string, Level>();
+    const levelOf = new LevelView(this.s.indexOf, this.cur.slice());
     const ids = this.s.netIds;
-    for (let i = 0; i < this.n; i++) levelOf.set(ids[i]!, LEVELS[this.cur[i]!]!);
     const contended = new Set<string>();
     for (const net of this.contSet) contended.add(ids[net]!);
     this.lastLevelOf = levelOf;

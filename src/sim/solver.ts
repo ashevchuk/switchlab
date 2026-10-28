@@ -351,9 +351,10 @@ function assertSameRelaxation(cache: StepStructureCache, fast: Relaxed, dense: R
   if (fast.settled !== dense.settled) problems.push(`settled ${fast.settled} != ${dense.settled}`);
   let levelMismatches = 0;
   for (let i = 0; i < cache.netIds.length; i++) {
-    if (fast.levelAt(i) === dense.levelAt(i)) continue;
+    const netId = cache.netIds[i]!;
+    if (fast.levelAt(i) === dense.levelAt(i) && fast.levelOf.get(netId) === dense.levelOf.get(netId)) continue;
     if (levelMismatches++ < MISMATCH_REPORT_LIMIT) {
-      problems.push(`net ${cache.netIds[i]}: event ${fast.levelAt(i)}, dense ${dense.levelAt(i)}`);
+      problems.push(`net ${netId}: event ${fast.levelAt(i)} (map ${fast.levelOf.get(netId)}), dense ${dense.levelAt(i)}`);
     }
   }
   if (levelMismatches > MISMATCH_REPORT_LIMIT) problems.push(`... ${levelMismatches} nets differ in total`);
