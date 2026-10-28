@@ -18,6 +18,10 @@ describe('disassembleTiny', () => {
     ]);
   });
 
+  it('tells JZ from OUT by the low nibble', () => {
+    expect(disassembleTiny(Uint8Array.of(0xf0, 0xf1, 0xf4, 0xff), 0, 4).map((l) => l.text)).toEqual(['OUT', 'JZ 0x01', 'JZ 0x04', 'JZ 0x0f']);
+  });
+
   it('lists one-byte instructions from the requested address, bounded by count and image', () => {
     const bytes = Uint8Array.of(0x01, 0xf0, 0x81, 0xf0, 0xe0);
     const lines = disassembleTiny(bytes, 2, 10);

@@ -796,6 +796,87 @@ describe('buildMinimalCpu — JMP and OUT in the formerly reserved 111 slot', ()
   });
 });
 
+describe('buildMinimalCpu — JZ, a conditional jump on ACC = 0', () => {
+  /** Runs `program` and returns the port register and PC after each executed instruction. */
+  function runInstructions(program: Uint8Array, count: number): { port: number[]; pc: number[] } {
+    const library = new ChipLibrary();
+    const parent = new Circuit();
+    const cpu = buildMinimalCpu(parent, library, 4, program);
+
+    const resetPulse = makeInput(parent, 1);
+    wire(parent, resetPulse.pins.out, cpu.reset);
+    const dataClk = makeInput(parent, 0);
+    wire(parent, dataClk.pins.out, cpu.clk);
+    const phaseClk = makeInput(parent, 0);
+    wire(parent, phaseClk.pins.out, cpu.phaseClk);
+    const fsmLoad = makeInput(parent, 1);
+    wire(parent, fsmLoad.pins.out, cpu.fsmLoad);
+    const fsmD0 = makeInput(parent, 1);
+    wire(parent, fsmD0.pins.out, cpu.fsmD[0]!);
+    const fsmD1 = makeInput(parent, 0);
+    wire(parent, fsmD1.pins.out, cpu.fsmD[1]!);
+    const fsmD2 = makeInput(parent, 0);
+    wire(parent, fsmD2.pins.out, cpu.fsmD[2]!);
+
+    let state = initialState();
+    let netMap!: NetMap;
+    const tick = () => ({ state, netMap } = tickHierarchical(parent, library, state));
+    const pulse = (sig: { value: 0 | 1 }) => {
+      sig.value = 1;
+      tick();
+      sig.value = 0;
+      tick();
+    };
+    const read = (pins: Pin[]) => pins.reduce<number>((acc, p, i) => acc + (levelAt(state, netMap, p.id) === 1 ? 1 << i : 0), 0);
+
+    tick();
+    pulse(phaseClk);
+    fsmLoad.value = 0;
+    pulse(dataClk);
+    resetPulse.value = 0;
+    pulse(dataClk);
+
+    const port: number[] = [];
+    const pc: number[] = [];
+    for (let i = 0; i < count; i++) {
+      pulse(phaseClk);
+      pulse(dataClk);
+      pulse(phaseClk);
+      pulse(dataClk);
+      port.push(read(cpu.out));
+      pc.push(read(cpu.pc));
+      pulse(phaseClk);
+      pulse(dataClk);
+    }
+    return { port, pc };
+  }
+
+  it('jumps when ACC is zero and skips the instructions in between', () => {
+    // LDI 0; JZ 4; LDI 7; OUT; LDI 1; OUT; JMP 6
+    const { port, pc } = runInstructions(Uint8Array.of(0x00, 0xf4, 0x07, 0xf0, 0x01, 0xf0, 0xe6), 5);
+    expect(pc[1]).toBe(4); // right after JZ
+    expect(port[3]).toBe(1); // LDI 1; OUT at 4-5, the OUT of 7 was skipped
+    expect(port).not.toContain(7);
+  });
+
+  it('falls through when ACC is not zero', () => {
+    // LDI 1; JZ 4; LDI 2; OUT; LDI 3; OUT
+    const { port, pc } = runInstructions(Uint8Array.of(0x01, 0xf4, 0x02, 0xf0, 0x03, 0xf0), 6);
+    expect(pc[1]).toBe(2);
+    expect(port[1]).toBe(0); // JZ is not an OUT
+    expect(port[3]).toBe(2);
+    expect(port[5]).toBe(3);
+  });
+
+  it('counts up to the wrap-around and leaves the loop on the right pass', () => {
+    // ACC = 31*8 + 5 = 253; loop: ADI 1; JZ done; JMP loop; done: LDI 1; OUT
+    const program = Uint8Array.of(0x1f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x3f, 0x25, 0x21, 0xfc, 0xe9, 0x01, 0xf0);
+    const { port } = runInstructions(program, 19);
+    expect(port[17]).not.toBe(1); // still looping after 18 instructions
+    expect(port[18]).toBe(1); // 253 -> 254 -> 255 -> 0 takes three passes
+  });
+});
+
 describe('buildZ80Decoder — real Z80 opcode field extraction (x/y/z)', () => {
   /**
    * Checked directly against real, well-known opcode bytes from an actual

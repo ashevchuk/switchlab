@@ -1118,7 +1118,8 @@ bits 7-5 = 100: XRI imm    ACC <- ACC ^ imm
 bits 7-5 = 101: STORE addr RAM[addr] <- ACC (ACC unchanged)
 bits 7-5 = 110: LOAD addr  ACC <- RAM[addr]
 bits 7-5 = 111, bit 4 = 0: JMP addr  PC <- bits 0-3 of the instruction
-bits 7-5 = 111, bit 4 = 1: OUT       port register <- ACC
+0xF0 (111_10000):          OUT       port register <- ACC
+0xF1-0xFF (111_1aaaa):     JZ addr   PC <- bits 0-3 if ACC = 0, else continue
 ```
 
 (`ANI`/`ORI`/`XRI` follow the 8080/Z80 assembly convention for "AND/OR/XOR
@@ -1136,10 +1137,13 @@ instructions vs. 3 others isn't a power-of-two split any one bit can
 express, the way `bit7` alone used to separate "ACC op" from "memory op"
 cleanly for LDI/ADI vs. STORE/LOAD). `dec.lines[0..6]` name
 `isLdi`/`isAdi`/`isAni`/`isOri`/`isXri`/`isStore`/`isLoad`; `lines[7]`
-(`isExt`) is split by instruction bit 4 into JMP and OUT. JMP reloads PC
-through a hold-or-target mux per PC bit, enabled by `jmpNow` (phase 2); the
-target is 4 bits, so JMP reaches addresses 0-15 only. OUT loads an 8-bit
-port register from ACC. Every control signal is built from what an
+(`isExt`) is split by instruction bit 4 into JMP and the pair OUT/JZ, and
+the pair by whether the low nibble is zero (a NOR of four bits). JMP and JZ
+reload PC through a hold-or-target mux per PC bit, enabled by `jmpNow` or
+`jzNow` (phase 2) ORed together; the target is 4 bits, so both reach addresses
+0-15 only. JZ is taken when all 8 bits of ACC are 0 (a NOR tree on ACC), so it
+cannot target address 0, whose encoding is OUT. OUT loads an 8-bit port
+register from ACC. Every control signal is built from what an
 instruction *should* do, so an instruction is inert for every signal
 it does not drive. From there:
 
@@ -4819,9 +4823,10 @@ section's own success story.
   does. There's no indirect or indexed addressing (an address computed
   from ACC, or ACC plus an offset) — every memory access's target is a
   constant baked into the instruction at program-authoring time, not
-  something the running program can compute. There is no conditional jump,
-  so a program cannot wait on a counter: a loop's period is its length in
-  instructions.
+  something the running program can compute. JZ is the only conditional
+  jump and tests ACC alone, so a delay loop counts ACC up to the wrap-around
+  (`loop: ADI 1 / JZ done / JMP loop`): ACC is the only register, ADI takes a
+  5-bit immediate and nothing subtracts.
 - `buildMinimalCpu`'s own test takes 70-90+ seconds — noticeably slower
   than every earlier composite's test, for the unsurprising reason that
   it's the largest circuit `tickHierarchical`-style tests have flattened

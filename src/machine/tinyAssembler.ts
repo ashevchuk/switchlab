@@ -1,5 +1,5 @@
 import type { AssembleResult } from './assembler.js';
-import { EXT_SLOT, JMP_OR_OUT_BIT, JMP_TARGET_MASK, OPCODE_SLOT_SHIFT, OPERAND_MASK, OPERAND_MNEMONICS } from './tinyIsa.js';
+import { EXT_SLOT, JMP_TARGET_MASK, OPCODE_SLOT_SHIFT, OPERAND_MASK, OPERAND_MNEMONICS, OUT_OPCODE } from './tinyIsa.js';
 
 interface SourceLine {
   lineNo: number;
@@ -14,7 +14,7 @@ function hex2(n: number): string {
   return n.toString(16).padStart(2, '0');
 }
 
-/** Assembler for the Tiny CPU: `LDI 1`, `OUT`, `loop: JMP loop`, `; comments`. */
+/** Assembler for the Tiny CPU: `LDI 1`, `OUT`, `loop: JMP loop`, `JZ done`, `; comments`. */
 export function assembleTiny(source: string, origin = 0): AssembleResult {
   const errors: string[] = [];
   const labels = new Map<string, number>();
@@ -63,9 +63,13 @@ export function assembleTiny(source: string, origin = 0): AssembleResult {
     } else if (line.mnemonic === 'JMP') {
       const target = resolve(line, JMP_TARGET_MASK);
       if (target !== null) opcode = (EXT_SLOT << OPCODE_SLOT_SHIFT) | target;
+    } else if (line.mnemonic === 'JZ') {
+      const target = resolve(line, JMP_TARGET_MASK);
+      if (target === 0) errors.push(`line ${line.lineNo}: JZ cannot target address 0`);
+      else if (target !== null) opcode = OUT_OPCODE | target;
     } else if (line.mnemonic === 'OUT') {
       if (line.operand !== undefined) errors.push(`line ${line.lineNo}: OUT takes no operand`);
-      else opcode = (EXT_SLOT << OPCODE_SLOT_SHIFT) | JMP_OR_OUT_BIT;
+      else opcode = OUT_OPCODE;
     } else {
       errors.push(`line ${line.lineNo}: unknown mnemonic ${line.mnemonic}`);
     }

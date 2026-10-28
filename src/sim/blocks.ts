@@ -1448,7 +1448,8 @@ function trackBlock<T>(parent: Circuit, blocks: CpuBlocks | undefined, name: str
  *   bits 7-5 = 101: STORE addr RAM[addr] <- ACC (ACC unchanged)
  *   bits 7-5 = 110: LOAD addr  ACC <- RAM[addr]
  *   bits 7-5 = 111, bit 4 = 0: JMP addr   PC <- bits 0-3 of the instruction
- *   bits 7-5 = 111, bit 4 = 1: OUT        port register <- ACC (bits 0-3 ignored)
+ *   0xF0 (111_10000):          OUT        port register <- ACC
+ *   bits 7-4 = 1111, bits 3-0 != 0: JZ addr  PC <- bits 0-3 if ACC = 0, else continue
  *
  * (`ANI`/`ORI`/`XRI` follow the 8080/Z80 assembly convention for
  * "AND/OR/XOR immediate" — the one place this made-up ISA's naming
@@ -1622,7 +1623,7 @@ export function buildMinimalCpu(
   wire(parent, loadNow.out, ramOe.b);
   wire(parent, ramOe.out, ram.pins.oe!);
 
-  // JMP (111_0aaaa) and OUT (111_1xxxx) share the 111 slot, split by bit 4.
+  // JMP (111_0aaaa), OUT (111_10000) and JZ (111_1aaaa, aaaa != 0) share the 111 slot.
   const notBit4 = buildNot(parent, { x: pos.x + 3900, y: pos.y + 500 });
   wire(parent, ir.q[4]!, notBit4.in);
   const isJmp = buildAnd(parent, { x: pos.x + 4100, y: pos.y + 500 });
@@ -1631,20 +1632,71 @@ export function buildMinimalCpu(
   const jmpNow = buildAnd(parent, { x: pos.x + 4300, y: pos.y + 500 });
   wire(parent, isJmp.out, jmpNow.a);
   wire(parent, fsm.phase[2]!, jmpNow.b);
-  const isOut = buildAnd(parent, { x: pos.x + 4100, y: pos.y + 700 });
-  wire(parent, isExt!, isOut.a);
-  wire(parent, ir.q[4]!, isOut.b);
-  const outNow = buildAnd(parent, { x: pos.x + 4300, y: pos.y + 700 });
+  const isHighExt = buildAnd(parent, { x: pos.x + 4100, y: pos.y + 700 });
+  wire(parent, isExt!, isHighExt.a);
+  wire(parent, ir.q[4]!, isHighExt.b);
+  const lowOr01 = buildOr(parent, { x: pos.x + 3900, y: pos.y + 900 });
+  wire(parent, ir.q[0]!, lowOr01.a);
+  wire(parent, ir.q[1]!, lowOr01.b);
+  const lowOr23 = buildOr(parent, { x: pos.x + 3900, y: pos.y + 1000 });
+  wire(parent, ir.q[2]!, lowOr23.a);
+  wire(parent, ir.q[3]!, lowOr23.b);
+  const lowNonZero = buildOr(parent, { x: pos.x + 4100, y: pos.y + 950 });
+  wire(parent, lowOr01.out, lowNonZero.a);
+  wire(parent, lowOr23.out, lowNonZero.b);
+  const lowZero = buildNot(parent, { x: pos.x + 4300, y: pos.y + 950 });
+  wire(parent, lowNonZero.out, lowZero.in);
+  const isOut = buildAnd(parent, { x: pos.x + 4500, y: pos.y + 700 });
+  wire(parent, isHighExt.out, isOut.a);
+  wire(parent, lowZero.out, isOut.b);
+  const outNow = buildAnd(parent, { x: pos.x + 4700, y: pos.y + 700 });
   wire(parent, isOut.out, outNow.a);
   wire(parent, fsm.phase[2]!, outNow.b);
 
-  // PC's next value: itself (hold), or the JMP target. Bit 4 of the target is
-  // always 0 because that bit selects JMP vs OUT.
+  // JZ: taken when ACC is all zeros (NOR of its 8 bits) at its own execute step.
+  const isJz = buildAnd(parent, { x: pos.x + 4500, y: pos.y + 1100 });
+  wire(parent, isHighExt.out, isJz.a);
+  wire(parent, lowNonZero.out, isJz.b);
+  const accOr01 = buildOr(parent, { x: pos.x + 3900, y: pos.y + 1200 });
+  wire(parent, acc.q[0]!, accOr01.a);
+  wire(parent, acc.q[1]!, accOr01.b);
+  const accOr23 = buildOr(parent, { x: pos.x + 3900, y: pos.y + 1300 });
+  wire(parent, acc.q[2]!, accOr23.a);
+  wire(parent, acc.q[3]!, accOr23.b);
+  const accOr45 = buildOr(parent, { x: pos.x + 3900, y: pos.y + 1400 });
+  wire(parent, acc.q[4]!, accOr45.a);
+  wire(parent, acc.q[5]!, accOr45.b);
+  const accOr67 = buildOr(parent, { x: pos.x + 3900, y: pos.y + 1500 });
+  wire(parent, acc.q[6]!, accOr67.a);
+  wire(parent, acc.q[7]!, accOr67.b);
+  const accOrLow = buildOr(parent, { x: pos.x + 4100, y: pos.y + 1250 });
+  wire(parent, accOr01.out, accOrLow.a);
+  wire(parent, accOr23.out, accOrLow.b);
+  const accOrHigh = buildOr(parent, { x: pos.x + 4100, y: pos.y + 1450 });
+  wire(parent, accOr45.out, accOrHigh.a);
+  wire(parent, accOr67.out, accOrHigh.b);
+  const accNonZero = buildOr(parent, { x: pos.x + 4300, y: pos.y + 1350 });
+  wire(parent, accOrLow.out, accNonZero.a);
+  wire(parent, accOrHigh.out, accNonZero.b);
+  const accZero = buildNot(parent, { x: pos.x + 4500, y: pos.y + 1350 });
+  wire(parent, accNonZero.out, accZero.in);
+  const isJzTaken = buildAnd(parent, { x: pos.x + 4700, y: pos.y + 1100 });
+  wire(parent, isJz.out, isJzTaken.a);
+  wire(parent, accZero.out, isJzTaken.b);
+  const jzNow = buildAnd(parent, { x: pos.x + 4900, y: pos.y + 1100 });
+  wire(parent, isJzTaken.out, jzNow.a);
+  wire(parent, fsm.phase[2]!, jzNow.b);
+  const pcLoadTarget = buildOr(parent, { x: pos.x + 4500, y: pos.y + 500 });
+  wire(parent, jmpNow.out, pcLoadTarget.a);
+  wire(parent, jzNow.out, pcLoadTarget.b);
+
+  // PC's next value: itself (hold), or the JMP/JZ target. Bit 4 of the target is
+  // always 0: it is part of the opcode in both jumps.
   pc.q.forEach((q, i) => {
     const mux = makeChipInstance(parent, muxDef, { x: pos.x + 300, y: pos.y - 300 - i * 100 });
-    wire(parent, jmpNow.out, mux.pins[muxDef.ports[0]!]!); // sel
+    wire(parent, pcLoadTarget.out, mux.pins[muxDef.ports[0]!]!); // sel
     wire(parent, q, mux.pins[muxDef.ports[1]!]!); // in0: hold
-    wire(parent, i < 4 ? ir.q[i]! : railPin(parent, 'GND', { x: pos.x + 300, y: pos.y - 200 - i * 100 }), mux.pins[muxDef.ports[2]!]!); // in1: JMP target
+    wire(parent, i < 4 ? ir.q[i]! : railPin(parent, 'GND', { x: pos.x + 300, y: pos.y - 200 - i * 100 }), mux.pins[muxDef.ports[2]!]!); // in1: jump target
     wire(parent, mux.pins[muxDef.ports[3]!]!, pc.d[i]!);
   });
 

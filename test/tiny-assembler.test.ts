@@ -21,9 +21,17 @@ describe('assembleTiny', () => {
     expect(assembleTiny('here: OUT\nJMP here', 20).errors).toContain('line 2: here is out of range (max 15)');
   });
 
+  it('assembles JZ with a number or a label as the target', () => {
+    expect([...assembleTiny('LDI 0\nJZ 4').bytes]).toEqual([0x00, 0xf4]);
+    expect([...assembleTiny('ldi 0\njz done\nout\ndone: out').bytes]).toEqual([0x00, 0xf3, 0xf0, 0xf0]);
+  });
+
   it.each([
     ['LDI 32', 'line 1: 32 is out of range (max 31)'],
     ['JMP 16', 'line 1: 16 is out of range (max 15)'],
+    ['JZ 16', 'line 1: 16 is out of range (max 15)'],
+    ['JZ 0', 'line 1: JZ cannot target address 0'],
+    ['here: JZ here', 'line 1: JZ cannot target address 0'],
     ['LDI', 'line 1: LDI needs an operand'],
     ['OUT 1', 'line 1: OUT takes no operand'],
     ['NOP', 'line 1: unknown mnemonic NOP'],
