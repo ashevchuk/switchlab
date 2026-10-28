@@ -837,7 +837,7 @@ JR spin</textarea>
       return;
     }
     try {
-      const bytes = compileBasic(this.asmSource.value, addr);
+      const bytes = compileBasic(this.asmSource.value, addr, softIoLayoutForRam(this.ram.bytes));
       this.loadHex.value = bytesToHexPrompt(bytes);
       const loaded = loadHexAt(this.ram.bytes, addr, [...bytes]);
       this.log(loaded.ok ? `BASIC ${bytes.length}B @ ${addr.toString(16)}` : `! ${loaded.message}`);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { compileBasic } from '../src/machine/basic.js';
 import { loadBasicRom } from '../src/machine/basicRom.js';
-import { FB_BASE, KEY_DATA, KEY_STATUS, MACHINE_ADDR_BITS } from '../src/machine/memoryMap.js';
+import { CPM_ADDR_BITS, FB_BASE, KEY_DATA, KEY_STATUS, MACHINE_ADDR_BITS, softIoLayoutForAddrBits } from '../src/machine/memoryMap.js';
 import { createSoftZ80, softRun } from '../src/machine/softZ80.js';
 import { injectKey } from '../src/machine/tty.js';
 
@@ -206,5 +206,59 @@ describe('mini BASIC', () => {
     softRun(cpu, ram, 20000, { clearOnReadKeys: true });
     expect(cpu.halted).toBe(true);
     expect(ram[FB_BASE]).toBe('B'.charCodeAt(0));
+  });
+});
+
+describe('mini BASIC on the 64K layout', () => {
+  const layout = softIoLayoutForAddrBits(CPM_ADDR_BITS);
+
+  function run64k(source: string, origin = 0x200) {
+    const bytes = compileBasic(source, origin, layout);
+    const ram = new Uint8Array(layout.ramSize);
+    ram.set(bytes, origin);
+    const cpu = createSoftZ80(layout.stackTop);
+    cpu.pc = origin;
+    softRun(cpu, ram, 3000, { clearOnReadKeys: true });
+    return { bytes, ram, cpu };
+  }
+
+  it('keeps the 12-bit bytes unchanged when no layout is given', () => {
+    const source = '10 PRINT "HI"\n20 END';
+    expect([...compileBasic(source)]).toEqual([...compileBasic(source, 0x200, softIoLayoutForAddrBits(MACHINE_ADDR_BITS))]);
+  });
+
+  it('initialises the print cursor at the 64K text framebuffer', () => {
+    const bytes = compileBasic('10 PRINT "HI"\n20 END', 0x200, layout);
+    expect([...bytes.subarray(0, 3)]).toEqual([0x21, layout.fbBase & 0xff, layout.fbBase >> 8]);
+  });
+
+  it('prints into the 64K framebuffer, not the 12-bit one', () => {
+    const { ram, cpu } = run64k('10 CLS\n20 PRINT "HI"\n30 END');
+    expect(cpu.halted).toBe(true);
+    expect(ram[layout.fbBase]).toBe('H'.charCodeAt(0));
+    expect(ram[layout.fbBase + 1]).toBe('I'.charCodeAt(0));
+    expect(ram[FB_BASE]).toBe(0);
+  });
+
+  it('reads INPUT from the 64K key registers', () => {
+    const bytes = compileBasic('10 INPUT A\n20 END', 0x200, layout);
+    const ram = new Uint8Array(layout.ramSize);
+    ram.set(bytes, 0x200);
+    injectKey(ram, 'Q'.charCodeAt(0));
+    const cpu = createSoftZ80(layout.stackTop);
+    cpu.pc = 0x200;
+    softRun(cpu, ram, 3000, { clearOnReadKeys: true });
+    expect(cpu.halted).toBe(true);
+    expect(ram[0xc00]).toBe('Q'.charCodeAt(0));
+  });
+
+  it('loadBasicRom installs a demo that prints into the 64K framebuffer', () => {
+    const ram = new Uint8Array(layout.ramSize);
+    const { origin } = loadBasicRom(ram);
+    const cpu = createSoftZ80(layout.stackTop);
+    cpu.pc = 0;
+    softRun(cpu, ram, 20000, { clearOnReadKeys: true });
+    expect(origin).toBe(0x200);
+    expect(String.fromCharCode(...ram.subarray(layout.fbBase, layout.fbBase + 8))).toBe('BASIC OK');
   });
 });

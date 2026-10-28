@@ -20,7 +20,12 @@
  * PRINT items may be strings, vars, or expressions (result byte written to FB).
  */
 
-import { FB_BASE, KEY_DATA, KEY_STATUS } from './memoryMap.js';
+import { FB_BASE, KEY_DATA, KEY_STATUS, type SoftIoLayout } from './memoryMap.js';
+
+/** The I/O addresses the compiled code touches; they differ between the 12-bit and 64K machine maps. */
+export type BasicIo = Pick<SoftIoLayout, 'fbBase' | 'keyStatus' | 'keyData'>;
+
+const DEFAULT_IO: BasicIo = { fbBase: FB_BASE, keyStatus: KEY_STATUS, keyData: KEY_DATA };
 
 const VAR_BASE = 0xc00;
 /** Little-endian FB write cursor (word). */
@@ -30,11 +35,12 @@ const FOR_LIMIT_BASE = 0xbd0;
 /** LD HL,FB_BASE / LD (PRINT_CURSOR),HL */
 const PREFIX_SIZE = 6;
 
-export function compileBasic(source: string, origin = 0x200): Uint8Array {
+/** `io` defaults to the 12-bit machine map; a 64K machine passes its own layout (softIoLayoutForRam). */
+export function compileBasic(source: string, origin = 0x200, io: BasicIo = DEFAULT_IO): Uint8Array {
   const lines = parseLines(source);
   if (lines.length === 0) return new Uint8Array(0);
 
-  const sizes = lines.map((ln) => measureStmt(ln.stmt));
+  const sizes = lines.map((ln) => measureStmt(ln.stmt, io));
   const addrOf = new Map<number, number>();
   let pc = (origin + PREFIX_SIZE) & 0xffff;
   for (let i = 0; i < lines.length; i++) {
@@ -43,7 +49,7 @@ export function compileBasic(source: string, origin = 0x200): Uint8Array {
   }
 
   const out: number[] = [];
-  emitPrintCursorInit(out);
+  emitPrintCursorInit(out, io);
   const forStack: ForFrame[] = [];
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i]!;
@@ -51,7 +57,7 @@ export function compileBasic(source: string, origin = 0x200): Uint8Array {
       i + 1 < lines.length
         ? addrOf.get(lines[i + 1]!.num)!
         : (origin + PREFIX_SIZE + sizes.reduce((a, b) => a + b, 0)) & 0xffff;
-    emitStmt(ln.stmt, out, addrOf, false, forStack, nextLineAddr);
+    emitStmt(ln.stmt, out, addrOf, false, forStack, nextLineAddr, io);
   }
   if (forStack.length > 0) throw new Error('BASIC: FOR without NEXT');
   return Uint8Array.from(out);
@@ -88,14 +94,14 @@ function varAddr(name: string): number {
   return VAR_BASE + (u.charCodeAt(0) - 0x41);
 }
 
-function emitPrintCursorInit(out: number[]): void {
-  out.push(0x21, FB_BASE & 0xff, (FB_BASE >> 8) & 0xff); // LD HL,FB_BASE
+function emitPrintCursorInit(out: number[], io: BasicIo): void {
+  out.push(0x21, io.fbBase & 0xff, (io.fbBase >> 8) & 0xff); // LD HL,fbBase
   out.push(0x22, PRINT_CURSOR & 0xff, (PRINT_CURSOR >> 8) & 0xff); // LD (PRINT_CURSOR),HL
 }
 
-function measureStmt(stmt: string): number {
+function measureStmt(stmt: string, io: BasicIo): number {
   const buf: number[] = [];
-  emitStmt(stmt, buf, new Map(), true, [], 0);
+  emitStmt(stmt, buf, new Map(), true, [], 0, io);
   return buf.length;
 }
 
@@ -106,6 +112,7 @@ function emitStmt(
   measuring = false,
   forStack: ForFrame[] = [],
   nextLineAddr = 0,
+  io: BasicIo = DEFAULT_IO,
 ): void {
   const u = stmt.toUpperCase();
 
@@ -117,7 +124,7 @@ function emitStmt(
   if (u.startsWith('REM')) return;
 
   if (u === 'CLS' || u.startsWith('CLS ')) {
-    emitCls(out);
+    emitCls(out, io);
     return;
   }
 
@@ -172,7 +179,7 @@ function emitStmt(
   }
 
   if (u.startsWith('INPUT')) {
-    emitInput(stmt.slice(5).trim(), out);
+    emitInput(stmt.slice(5).trim(), out, io);
     return;
   }
 
@@ -185,12 +192,12 @@ function emitStmt(
 }
 
 /** Clear FB with spaces (256 cells via DJNZ B=0) and reset PRINT_CURSOR. */
-function emitCls(out: number[]): void {
-  out.push(0x21, FB_BASE & 0xff, (FB_BASE >> 8) & 0xff); // LD HL,FB_BASE
+function emitCls(out: number[], io: BasicIo): void {
+  out.push(0x21, io.fbBase & 0xff, (io.fbBase >> 8) & 0xff); // LD HL,fbBase
   out.push(0x06, 0x00); // LD B,0 → 256 iters
   out.push(0x3e, 0x20); // LD A,' '
   out.push(0x77, 0x23, 0x10, 0xfc); // LD (HL),A / INC HL / DJNZ
-  out.push(0x21, FB_BASE & 0xff, (FB_BASE >> 8) & 0xff);
+  out.push(0x21, io.fbBase & 0xff, (io.fbBase >> 8) & 0xff);
   out.push(0x22, PRINT_CURSOR & 0xff, (PRINT_CURSOR >> 8) & 0xff);
 }
 
@@ -307,14 +314,14 @@ function emitNext(stmt: string, out: number[], forStack: ForFrame[], measuring: 
   out.push(0xc3, loopAddr & 0xff, (loopAddr >> 8) & 0xff);
 }
 
-function emitInput(varName: string, out: number[]): void {
+function emitInput(varName: string, out: number[], io: BasicIo): void {
   const v = varName.trim();
   if (!/^[A-Za-z]$/.test(v)) throw new Error(`BASIC: INPUT expects var`);
   const dest = varAddr(v);
-  out.push(0x3a, KEY_STATUS & 0xff, (KEY_STATUS >> 8) & 0xff);
+  out.push(0x3a, io.keyStatus & 0xff, (io.keyStatus >> 8) & 0xff);
   out.push(0xb7);
   out.push(0x28, 0xfa);
-  out.push(0x3a, KEY_DATA & 0xff, (KEY_DATA >> 8) & 0xff);
+  out.push(0x3a, io.keyData & 0xff, (io.keyData >> 8) & 0xff);
   out.push(0x32, dest & 0xff, (dest >> 8) & 0xff);
 }
 

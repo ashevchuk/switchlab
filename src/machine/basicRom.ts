@@ -9,8 +9,8 @@
  * into a ROM / Z80 program prompt.
  */
 
-import { compileBasic } from './basic.js';
-import { MACHINE_RAM_SIZE } from './memoryMap.js';
+import { compileBasic, type BasicIo } from './basic.js';
+import { MACHINE_RAM_SIZE, softIoLayoutForRam } from './memoryMap.js';
 
 export const BASIC_ORIGIN = 0x200;
 
@@ -27,8 +27,8 @@ export const BASIC_DEMO_SOURCE = `
 110 RETURN
 `;
 
-export function buildBasicProgram(origin = BASIC_ORIGIN): Uint8Array {
-  return compileBasic(BASIC_DEMO_SOURCE, origin);
+export function buildBasicProgram(origin = BASIC_ORIGIN, io?: BasicIo): Uint8Array {
+  return compileBasic(BASIC_DEMO_SOURCE, origin, io);
 }
 
 /** Full 4K image with JP @0000 and BASIC @ origin. */
@@ -47,8 +47,9 @@ export function loadBasicRom(ram: Uint8Array, origin = BASIC_ORIGIN): { bytes: n
   if (ram.length < origin + 64) {
     throw new Error('BASIC ROM needs at least 12-bit RAM');
   }
-  const code = buildBasicProgram(origin);
-  if (origin + code.length > Math.min(ram.length, 0xf00)) {
+  const layout = softIoLayoutForRam(ram);
+  const code = buildBasicProgram(origin, layout);
+  if (origin + code.length > Math.min(ram.length, layout.ioGuard)) {
     throw new Error('BASIC image overlaps KEY/reserved region');
   }
   ram[0] = 0xc3;
