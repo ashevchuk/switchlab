@@ -59,9 +59,14 @@ interface FollowWindow {
   addrs: ReadonlySet<number>;
 }
 
-/** Where the Follow PC listing starts: unchanged while the PC is on a listed instruction, else at the PC. */
-export function followWindowStart(window: FollowWindow | null, pc: number): number {
-  return window?.addrs.has(pc) ? window.start : pc;
+/** Where a Follow PC listing is (re)anchored: the PC, or address 0 when the whole memory fits in one listing. */
+export function followAnchor(pc: number, memorySize: number, listingLength: number): number {
+  return memorySize <= listingLength ? 0 : pc;
+}
+
+/** Where the Follow PC listing starts: unchanged while the PC is on a listed instruction, else at the anchor. */
+export function followWindowStart(window: FollowWindow | null, pc: number, anchor = pc): number {
+  return window?.addrs.has(pc) ? window.start : anchor;
 }
 
 export interface EditorIsa {
@@ -292,7 +297,9 @@ export class MemoryEditor {
     // Origin: the PC when following, else the edit cursor. A followed listing
     // stays put while the PC moves inside it, so the pane does not jump or resize.
     const following = this.followPcEl.checked && this.livePc != null;
-    const origin = following ? followWindowStart(this.followWindow, this.livePc!) : this.cursor;
+    const origin = following
+      ? followWindowStart(this.followWindow, this.livePc!, followAnchor(this.livePc!, this.mem.bytes.length, DISASM_COUNT))
+      : this.cursor;
     const lines = this.isa
       ? this.isa.disassemble(this.mem.bytes, origin, DISASM_COUNT)
       : disassemble(this.mem.bytes, origin, { count: DISASM_COUNT });
