@@ -1580,7 +1580,7 @@ JR spin</textarea>
   private ensureMachineReadyForRun(): void {
     const ram = this.ensurePanelRam();
     if (!ram || !this.runner) return;
-    if (ram.addrBits >= 16 && ram.bytes.length >= 0x10000 && !this.runner.isSpectrum) {
+    if (ram.addrBits >= 16 && ram.bytes.length >= 0x10000 && !this.runner.isSpectrum && !this.runner.isPlacedMachine) {
       try {
         this.runner.ensureSpectrumSoft('48');
         this.setTab('spectrum');

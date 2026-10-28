@@ -126,6 +126,13 @@ export class MachineRunner {
   }
   /** Spectrum engine + optional Worker host. */
   spectrumHost: SpectrumWorkerHost | null = null;
+
+  /**
+   * True for a machine the user placed or booted in a non-Spectrum mode, false for
+   * a 64K session restored after a page reload. Run/Reboot only revives a Spectrum
+   * for the restored kind.
+   */
+  isPlacedMachine = false;
   /** Last transferable RGBA from worker/engine (for blit). */
   lastSpectrumRgba: Uint8Array | null = null;
   /** AY + Web Audio (created lazily on first Spectrum frame with sound). */
@@ -384,8 +391,10 @@ export class MachineRunner {
       this.spectrumTape = this.spectrumHost.engine.tape;
       this.devices.cpm = null;
       this.devices.realCpm = false;
+      this.isPlacedMachine = false;
       void this.ayAudio.ensure();
     } else {
+      this.isPlacedMachine = true;
       this.spectrumHost?.stop();
       this.spectrumHost = null;
       this.ayAudio.onSampleRate = null;
@@ -796,6 +805,7 @@ export class MachineRunner {
     opts?: { readPin?: (pin: Pin) => 0 | 1 | 'Z' },
   ): void {
     this.detach();
+    this.isPlacedMachine = true;
     this.circuit = circuit;
     this.library = library;
     this.cpu = cpu;
@@ -895,6 +905,7 @@ export class MachineRunner {
   }
 
   detach(): void {
+    this.isPlacedMachine = false;
     this.running = false;
     this.booted = false;
     this.soft = null;
