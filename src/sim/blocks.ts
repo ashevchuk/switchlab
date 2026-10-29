@@ -2061,25 +2061,23 @@ export interface Z80Cpu {
  * (real hardware uses variable M-cycle counts per instruction; this slice
  * uses a fixed phase count per instruction for architectural simplicity).
  *
- * `RET` only ever needs `EXEC1` — not because it's a simpler mechanism,
- * but because of a scale coincidence specific to this slice: `PC` is only
- * `addrBits` wide (every test so far uses 4-6 bits, nowhere near real
- * Z80's 16), so a return address fits in *one* stack byte instead of the
- * two a real 16-bit `PC` would need. `RET` (`z=001,y=001` — the one entry
- * in `POP`'s own `z=001` column that isn't a `POP`) reads that one byte
- * off the stack straight into `PC`, on `EXEC1`. `RST n` needs *both*
- * phases, though, and NOT because the push itself is two bytes (it isn't
- * — same one-byte-PC coincidence as `RET`): it writes `PC`'s *current*
- * value (already past its own opcode — `INCREMENT` runs before `EXEC1`,
- * same as every other instruction) to the stack on `EXEC1`, then loads
- * `PC` with the fixed target on `EXEC2` — a *separate* edge from the push,
- * on purpose. The first version did both on the same `EXEC1` edge; found
- * live, that raced `PC`'s own jump against the push-data driver reading
- * `PC` for what to write, and — per the addressing doc comment below,
- * where a real write in this design always samples the fully-settled,
- * post-edge state — RAM ended up with the *jump target* pushed, not the
- * return address, so a subsequent `RET` landed right back at the `RST`
- * target instead of resuming after it.
+ * A return address is a whole word on the stack, high byte at the higher
+ * address, whatever `addrBits` is. `RET` (`z=001,y=001` — the one entry in
+ * `POP`'s own `z=001` column that isn't a `POP`) pops it in two phases, low
+ * byte on `EXEC1` and high byte on `EXEC2`, each loaded straight into its
+ * half of `PC` through the same half-load muxes the IM2 vector read uses
+ * (`PC_LOAD_LOW_NOW` / `PC_LOAD_HIGH_NOW`). `RST n`, `CALL nn`, `CALL cc,nn`,
+ * NMI and IM2 push it in two phases too: the first writes `PC`'s high byte
+ * (zero when `PC` is narrower than 9 bits) and copies `PC` into `retAddr` on
+ * the same edge, the second writes `retAddr`'s low byte. The value is `PC`'s
+ * *current* value (already past its own opcode — `INCREMENT` runs before
+ * `EXEC1`, same as every other instruction). Sourcing the low byte from
+ * `retAddr` rather than `PC` matters: the RAM write samples the settled
+ * post-edge state, and the second phase is also where `RST` loads `PC` with
+ * its fixed target (and `CALL` jumps), so reading `PC` there would push the
+ * *jump target* instead of the return address. The first version of `RST`
+ * did exactly that on a single edge, and a subsequent `RET` landed right
+ * back at the `RST` target instead of resuming after it.
  *
  * `SP` decrements for `PUSH`/`RST` (stack grows down), increments for
  * `POP`/`RET`, one step per `EXEC1`/`EXEC2` it's actually involved in — via
@@ -2377,23 +2375,16 @@ export interface Z80Cpu {
  * ends up pointing past all three bytes of this instruction, the address
  * execution should resume at.
  *
- * **The push deliberately writes one stack byte, not two — mirroring
- * `RST`'s own scale coincidence, not a new one.** A real Z80's return
- * address is 16 bits, needing two stack bytes; this project's own `RET`
- * (built for `RST`, long before this instruction existed) only ever reads
- * *one* byte back, because `PC` here is only `addrBits` wide. Pushing two
- * bytes for `CALL` while `RET` only ever pops one would silently break
- * every `CALL`-then-`RET` pair — not a limitation to route around but a
- * compatibility constraint already fixed by `RST`'s own design, so `CALL
- * nn`'s own push reuses `RST`'s exact mechanism: `stackWriteNow` (already
- * `OR(pushNow, rstNow)`) widens to a third term, `CALL_PUSH_NOW`, pulling
- * in the *entire* existing stack-write apparatus for free — `SP`'s own
- * decrement (`spWantDec` already reads the `STACK_WRITE_NOW` label this
- * feeds), RAM's write-enable (`ramWe` already includes `stackWriteNow`),
- * and RAM's own address-to-`SP` selection (`writeMux`, same label) — none
- * of it rebuilt, only a new push-*data* driver bank (mirroring `RST`'s
- * own PC-onto-the-bus bank exactly, gated by `CALL_PUSH_NOW` instead of
- * `rstNow`) needed adding.
+ * **The push writes the return address as a word, high byte first**, the
+ * same two-phase shape `PUSH rr` has, shared with `RST`, `CALL cc,nn`, NMI
+ * and IM2: `stackWriteNow` (already `OR(pushNow, rstNow)`) widens to a
+ * third term, `CALL_PUSH_NOW`, for the high byte and takes `CALL_JUMP_NOW`
+ * (via `RETADDR_PUSH_LOW_NOW`) for the low byte, pulling in the *entire*
+ * existing stack-write apparatus for free — `SP`'s own decrement
+ * (`spWantDec` already reads the `STACK_WRITE_NOW` label this feeds), RAM's
+ * write-enable (`ramWe` includes it) and RAM's own address-to-`SP`
+ * selection (`writeMux`, same label). The jump shares its edge with the
+ * low-byte write, which is why that byte comes from `retAddr`, not `PC`.
  *
  * `callTarget` — a *second*, separate holding register from `jpTarget`,
  * not a shared, widened one — takes the identical per-bit low/high
@@ -3293,19 +3284,23 @@ function buildZ80CpuInner(
   wire(parent, nmiServing.q[0]!, nmiJumpNow.a);
   tieToLabel('PHASE3', nmiJumpNow.b, { x: pos.x + 2500, y: pos.y + 4360 });
   tieToLabel('NMI_JUMP_NOW', nmiJumpNow.out, { x: pos.x + 2700, y: pos.y + 4360 });
-  // IM2 micro-ops (soft pushReturn + word-at-vector): PHASE2 push PC,
-  // PHASE3 read ISR lo at vec, PHASE4 read ISR hi at vec+1 into PC.
+  // IM2 micro-ops (soft pushReturn + word-at-vector): PHASE2 push PC high,
+  // PHASE3 push PC low, PHASE4 read ISR lo at vec, PHASE5 read ISR hi at vec+1 into PC.
   const im2PushNow = buildAnd(parent, { x: pos.x + 2600, y: pos.y + 4320 });
   wire(parent, im2Serving.q[0]!, im2PushNow.a);
   tieToLabel('PHASE2', im2PushNow.b, { x: pos.x + 2500, y: pos.y + 4320 });
   tieToLabel('IM2_PUSH_NOW', im2PushNow.out, { x: pos.x + 2700, y: pos.y + 4320 });
+  const im2PushLowNow = buildAnd(parent, { x: pos.x + 2600, y: pos.y + 4300 });
+  wire(parent, im2Serving.q[0]!, im2PushLowNow.a);
+  tieToLabel('PHASE3', im2PushLowNow.b, { x: pos.x + 2500, y: pos.y + 4300 });
+  tieToLabel('IM2_PUSH_LOW_NOW', im2PushLowNow.out, { x: pos.x + 2700, y: pos.y + 4300 });
   const im2ReadLoNow = buildAnd(parent, { x: pos.x + 2600, y: pos.y + 4280 });
   wire(parent, im2Serving.q[0]!, im2ReadLoNow.a);
-  tieToLabel('PHASE3', im2ReadLoNow.b, { x: pos.x + 2500, y: pos.y + 4280 });
+  tieToLabel('PHASE4', im2ReadLoNow.b, { x: pos.x + 2500, y: pos.y + 4280 });
   tieToLabel('IM2_READ_LO_NOW', im2ReadLoNow.out, { x: pos.x + 2700, y: pos.y + 4280 });
   const im2ReadHiNow = buildAnd(parent, { x: pos.x + 2600, y: pos.y + 4240 });
   wire(parent, im2Serving.q[0]!, im2ReadHiNow.a);
-  tieToLabel('PHASE4', im2ReadHiNow.b, { x: pos.x + 2500, y: pos.y + 4240 });
+  tieToLabel('PHASE5', im2ReadHiNow.b, { x: pos.x + 2500, y: pos.y + 4240 });
   tieToLabel('IM2_READ_HI_NOW', im2ReadHiNow.out, { x: pos.x + 2700, y: pos.y + 4240 });
   // Vector address = (I<<8)|irqBus, truncated to addrBits (I zero-extends
   // into bits above 8 when addrBits>8; bits above I's width stay GND).
@@ -5815,6 +5810,16 @@ function buildZ80CpuInner(
   wire(parent, retiNow.out, retiOrRetnNow.a);
   wire(parent, retnNow.out, retiOrRetnNow.b);
   tieToLabel('RETI_OR_RETN_NOW', retiOrRetnNow.out, { x: pos.x - 700, y: pos.y - 5830 }); // IFF1←IFF2 + pop
+  const retiHighNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5860 });
+  wire(parent, isReti.out, retiHighNow.a);
+  tieToLabel('PHASE5', retiHighNow.b, { x: pos.x - 950, y: pos.y - 5860 });
+  const retnHighNow = buildAnd(parent, { x: pos.x - 850, y: pos.y - 5880 });
+  wire(parent, isRetn.out, retnHighNow.a);
+  tieToLabel('PHASE5', retnHighNow.b, { x: pos.x - 950, y: pos.y - 5880 });
+  const retiOrRetnHighNow = buildOr(parent, { x: pos.x - 750, y: pos.y - 5870 });
+  wire(parent, retiHighNow.out, retiOrRetnHighNow.a);
+  wire(parent, retnHighNow.out, retiOrRetnHighNow.b);
+  tieToLabel('RETI_OR_RETN_HIGH_NOW', retiOrRetnHighNow.out, { x: pos.x - 700, y: pos.y - 5870 }); // high byte of the return address
 
   // x=01, z=7, y=4/y=5: RRD/RLD (real 0xED 0x67/0x6F) — a 12-bit BCD
   // nibble rotate spanning `A`'s own low nibble and both of `(HL)`'s,
@@ -7751,17 +7756,23 @@ function buildZ80CpuInner(
   const pushNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y + 650 });
   wire(parent, isPush.out, pushNow.a);
   wire(parent, execPhaseActive.out, pushNow.b);
-  // POP's own 2 register bytes need both EXEC1 and EXEC2, same as PUSH —
-  // but RET, despite sharing isStackRead/z=1 with POP, is single-cycle for
-  // the identical reason RST is (PC fits in one stack byte here): without
-  // this split, RET's own PC-capture and SP-increment would fire a SECOND,
-  // spurious time during EXEC2, off a since-incremented (wrong) address.
+  // POP's own 2 register bytes need both EXEC1 and EXEC2, same as PUSH.
+  // RET pops two bytes too, but into PC rather than a register pair, so it has
+  // its own signals (retNow on PHASE2, retHighNow on PHASE3) and joins readNow
+  // through `readNowStage` / `retPopHigh*` below, not through `popReadNow`.
   const popReadNow = buildAnd(parent, { x: pos.x + 10050, y: pos.y + 800 });
   wire(parent, isPop.out, popReadNow.a);
   wire(parent, execPhaseActive.out, popReadNow.b);
   const retNow = buildAnd(parent, { x: pos.x + 10050, y: pos.y + 900 });
   wire(parent, isRet.out, retNow.a);
   tieToLabel('PHASE2', retNow.b, { x: pos.x + 9950, y: pos.y + 900 });
+  // RET pops a whole return address: the low byte on PHASE2 (retNow) and the high
+  // byte on PHASE3 (retHighNow), each loaded into its half of PC straight from the
+  // bus (see PC_LOAD_LOW_NOW / PC_LOAD_HIGH_NOW at PC's commit muxes).
+  const retHighNow = buildAnd(parent, { x: pos.x + 10050, y: pos.y + 940 });
+  wire(parent, isRet.out, retHighNow.a);
+  tieToLabel('PHASE3', retHighNow.b, { x: pos.x + 9950, y: pos.y + 940 });
+  tieToLabel('RET_HIGH_NOW', retHighNow.out, { x: pos.x + 10150, y: pos.y + 940 });
   // popReadNow OR retNow — widened further below (see "x=11: RET cc") once
   // `RET cc`'s own conditional pop signal exists; that widening needs
   // `conditionTrue`, itself only built later inside "x=11: JP cc,nn", so
@@ -8019,9 +8030,8 @@ function buildZ80CpuInner(
   // every other conditional instruction in this file. Reuses `JP cc,nn`'s
   // own `conditionTrue` directly (identical y-to-condition encoding,
   // `dec.z`-independent) and the *existing* unconditional `RET`'s own
-  // single-byte pop shape — no dedicated target register either, since
-  // the popped byte already IS the full address, the same reason
-  // `retMux` itself never needed one.
+  // two-byte pop shape, low byte on PHASE2 and high byte on PHASE3, each
+  // loaded into its half of PC — no dedicated target register.
   const isRetCcZ = buildAnd(parent, { x: pos.x + 9700, y: pos.y - 3950 });
   wire(parent, isStackGroup, isRetCcZ.a);
   wire(parent, dec.z[0]!, isRetCcZ.b);
@@ -8032,6 +8042,13 @@ function buildZ80CpuInner(
   wire(parent, isRetCcPhase2.out, retCcTakenNow.a);
   wire(parent, conditionTrue!, retCcTakenNow.b);
   tieToLabel('RETCC_TAKEN_NOW', retCcTakenNow.out, { x: pos.x + 10000, y: pos.y - 3950 }); // anchor — readNow's own widening (below) and PC's own retCcMux (far) both read this
+  const isRetCcPhase3 = buildAnd(parent, { x: pos.x + 9800, y: pos.y - 3980 });
+  wire(parent, isRetCcZ.out, isRetCcPhase3.a);
+  tieToLabel('PHASE3', isRetCcPhase3.b, { x: pos.x + 9750, y: pos.y - 3960 });
+  const retCcHighNow = buildAnd(parent, { x: pos.x + 9900, y: pos.y - 3980 });
+  wire(parent, isRetCcPhase3.out, retCcHighNow.a);
+  wire(parent, conditionTrue!, retCcHighNow.b);
+  tieToLabel('RETCC_HIGH_NOW', retCcHighNow.out, { x: pos.x + 10000, y: pos.y - 3980 }); // high byte of the return address
 
   // `readNow`'s real, final definition — `readNowStageReti` (popReadNow OR
   // retNow OR retiNow, built with unconditional RET/POP/RETI long before
@@ -8052,8 +8069,19 @@ function buildZ80CpuInner(
   const popIxIyReadAny = buildOr(parent, { x: pos.x + 10250, y: pos.y + 880 });
   wire(parent, popIxReadAny.out, popIxIyReadAny.a);
   wire(parent, popIyReadAny.out, popIxIyReadAny.b);
+  // The second (high-byte) pop of RET, RET cc and RETI/RETN reads the next stack byte.
+  const retPopHigh1 = buildOr(parent, { x: pos.x + 10180, y: pos.y + 840 });
+  tieToLabel('RET_HIGH_NOW', retPopHigh1.a, { x: pos.x + 10080, y: pos.y + 840 });
+  tieToLabel('RETI_OR_RETN_HIGH_NOW', retPopHigh1.b, { x: pos.x + 10080, y: pos.y + 860 });
+  const retPopHigh2 = buildOr(parent, { x: pos.x + 10230, y: pos.y + 840 });
+  wire(parent, retPopHigh1.out, retPopHigh2.a);
+  tieToLabel('RETCC_HIGH_NOW', retPopHigh2.b, { x: pos.x + 10130, y: pos.y + 860 });
+  tieToLabel('PC_POP_HIGH_NOW', retPopHigh2.out, { x: pos.x + 10280, y: pos.y + 840 }); // anchor — PC's high-half load (far)
+  const readNowStageHigh = buildOr(parent, { x: pos.x + 10260, y: pos.y + 860 });
+  wire(parent, readNowStageCc.out, readNowStageHigh.a);
+  wire(parent, retPopHigh2.out, readNowStageHigh.b);
   const readNow = buildOr(parent, { x: pos.x + 10300, y: pos.y + 870 });
-  wire(parent, readNowStageCc.out, readNow.a);
+  wire(parent, readNowStageHigh.out, readNow.a);
   wire(parent, popIxIyReadAny.out, readNow.b);
 
   // x=00, z=0, y=4..7: JR cc,e (real 0x20/0x28/0x30/0x38 — NZ/Z/NC/C only,
@@ -8332,6 +8360,37 @@ function buildZ80CpuInner(
     tiePowerRail(parent, i === 0 ? 'GND' : 'VCC', pcMinus2Adder.b[i]!);
   }
 
+  // Return-address push, two phases: HIGH is the first phase each of RST, CALL nn,
+  // CALL cc,nn, NMI and IM2 already had for its push; LOW is the phase that is also
+  // the jump (IM2: the phase before its vector reads, which moved one phase later),
+  // so no instruction takes more phases than before except IM2.
+  const retAddrHigh1 = buildOr(parent, { x: pos.x + 9900, y: pos.y + 1300 });
+  wire(parent, rstNow.out, retAddrHigh1.a);
+  tieToLabel('NMI_PUSH_NOW', retAddrHigh1.b, { x: pos.x + 9800, y: pos.y + 1300 });
+  const retAddrHigh2 = buildOr(parent, { x: pos.x + 9950, y: pos.y + 1320 });
+  wire(parent, retAddrHigh1.out, retAddrHigh2.a);
+  tieToLabel('IM2_PUSH_NOW', retAddrHigh2.b, { x: pos.x + 9850, y: pos.y + 1320 });
+  const retAddrHigh3 = buildOr(parent, { x: pos.x + 10000, y: pos.y + 1340 });
+  wire(parent, retAddrHigh2.out, retAddrHigh3.a);
+  tieToLabel('CALL_PUSH_NOW', retAddrHigh3.b, { x: pos.x + 9900, y: pos.y + 1340 });
+  const retAddrHigh4 = buildOr(parent, { x: pos.x + 10050, y: pos.y + 1360 });
+  wire(parent, retAddrHigh3.out, retAddrHigh4.a);
+  tieToLabel('CALLCC_PUSH_NOW', retAddrHigh4.b, { x: pos.x + 9950, y: pos.y + 1360 });
+  tieToLabel('RETADDR_PUSH_HIGH_NOW', retAddrHigh4.out, { x: pos.x + 10100, y: pos.y + 1360 }); // anchor — retAddr's write enable and the high-byte bank (far)
+  const retAddrLow1 = buildOr(parent, { x: pos.x + 9900, y: pos.y + 1400 });
+  wire(parent, rstJumpNow.out, retAddrLow1.a);
+  tieToLabel('NMI_JUMP_NOW', retAddrLow1.b, { x: pos.x + 9800, y: pos.y + 1400 });
+  const retAddrLow2 = buildOr(parent, { x: pos.x + 9950, y: pos.y + 1420 });
+  wire(parent, retAddrLow1.out, retAddrLow2.a);
+  tieToLabel('IM2_PUSH_LOW_NOW', retAddrLow2.b, { x: pos.x + 9850, y: pos.y + 1420 });
+  const retAddrLow3 = buildOr(parent, { x: pos.x + 10000, y: pos.y + 1440 });
+  wire(parent, retAddrLow2.out, retAddrLow3.a);
+  tieToLabel('CALL_JUMP_NOW', retAddrLow3.b, { x: pos.x + 9900, y: pos.y + 1440 });
+  const retAddrLow4 = buildOr(parent, { x: pos.x + 10050, y: pos.y + 1460 });
+  wire(parent, retAddrLow3.out, retAddrLow4.a);
+  tieToLabel('CALLCC_JUMP_NOW', retAddrLow4.b, { x: pos.x + 9950, y: pos.y + 1460 });
+  tieToLabel('RETADDR_PUSH_LOW_NOW', retAddrLow4.out, { x: pos.x + 10100, y: pos.y + 1460 }); // anchor — the low-byte bank (far) and stackWriteNow below
+
   const stackWriteNowStage = buildOr(parent, { x: pos.x + 9950, y: pos.y + 900 }); // pushNow OR rstNow — decrements SP, and is the RAM-write/address-select condition
   wire(parent, pushNow.out, stackWriteNowStage.a);
   wire(parent, rstNow.out, stackWriteNowStage.b);
@@ -8370,10 +8429,13 @@ function buildZ80CpuInner(
   const stackWriteNowIrq = buildOr(parent, { x: pos.x + 10300, y: pos.y + 970 });
   wire(parent, stackWriteNowNmi.out, stackWriteNowIrq.a);
   tieToLabel('IM2_PUSH_NOW', stackWriteNowIrq.b, { x: pos.x + 10200, y: pos.y + 990 });
-  tieToLabel('STACK_WRITE_NOW', stackWriteNowIrq.out, { x: pos.x + 10350, y: pos.y + 920 }); // anchor — the far address-mux writeMux.sel below reads this via the label, not a ~9000-unit wire
+  const stackWriteNowRetLow = buildOr(parent, { x: pos.x + 10330, y: pos.y + 970 });
+  wire(parent, stackWriteNowIrq.out, stackWriteNowRetLow.a);
+  tieToLabel('RETADDR_PUSH_LOW_NOW', stackWriteNowRetLow.b, { x: pos.x + 10250, y: pos.y + 990 });
+  tieToLabel('STACK_WRITE_NOW', stackWriteNowRetLow.out, { x: pos.x + 10350, y: pos.y + 920 }); // anchor — the far address-mux writeMux.sel below reads this via the label, not a ~9000-unit wire
   tieToLabel('READ_NOW', readNow.out, { x: pos.x + 10350, y: pos.y + 820 }); // same anchor idea for readMux.sel
   const stackActive = buildOr(parent, { x: pos.x + 10400, y: pos.y + 950 }); // anything in x=11 currently driving SP/RAM
-  wire(parent, stackWriteNowIrq.out, stackActive.a);
+  wire(parent, stackWriteNowRetLow.out, stackActive.a);
   wire(parent, readNow.out, stackActive.b);
 
   // busActive: the WIDE union — anything that might be driving the shared
@@ -8492,7 +8554,7 @@ function buildZ80CpuInner(
   const ramWeOr = makeChipInstance(parent, ramWeOrDef, { x: pos.x + 9600, y: pos.y + 300 });
   const ramWeIn = (idx: number) => ramWeOr.pins[ramWeOrDef.ports[idx]!]!;
   wire(parent, ramWriteNow.out, ramWeIn(0));
-  wire(parent, stackWriteNowIrq.out, ramWeIn(1));
+  wire(parent, stackWriteNowRetLow.out, ramWeIn(1));
   tieToLabel('LDBCA_NOW', ramWeIn(2), { x: pos.x + 9500, y: pos.y + 350 });
   tieToLabel('LDDEA_NOW', ramWeIn(3), { x: pos.x + 9500, y: pos.y + 400 });
   tieToLabel('LDNNA_NOW', ramWeIn(4), { x: pos.x + 9500, y: pos.y + 450 });
@@ -9125,6 +9187,31 @@ function buildZ80CpuInner(
     wire(parent, freshMux.pins[muxDef.ports[3]!]!, callCcTarget.d[i]!);
   });
 
+  // Return-address capture for RST, CALL nn, CALL cc,nn, NMI and IM2: PC is copied
+  // here on the edge of the first (high-byte) push phase and the second (low-byte)
+  // phase writes it back out — see the push-data banks further down.
+  const retAddr = buildRegister(parent, library, addrBits, { x: pos.x - 700, y: pos.y - 5500 });
+  tieToLabel('RETADDR_PUSH_HIGH_NOW', retAddr.we, { x: pos.x - 800, y: pos.y - 5500 });
+  pc.q.forEach((q, i) => wire(parent, q, retAddr.d[i]!));
+
+  // RET, RET cc, RETI and RETN load PC a half at a time through the muxes the IM2
+  // vector read uses: low byte on the first pop, high byte on the second. The
+  // whole-word bus load (selRet / selRetCc) is no longer used.
+  const pcPopLow1 = buildOr(parent, { x: pos.x - 600, y: pos.y - 250 });
+  wire(parent, retNow.out, pcPopLow1.a);
+  tieToLabel('RETI_OR_RETN_NOW', pcPopLow1.b, { x: pos.x - 700, y: pos.y - 250 });
+  const pcPopLow2 = buildOr(parent, { x: pos.x - 550, y: pos.y - 230 });
+  wire(parent, pcPopLow1.out, pcPopLow2.a);
+  tieToLabel('RETCC_TAKEN_NOW', pcPopLow2.b, { x: pos.x - 650, y: pos.y - 230 });
+  const pcLoadLow = buildOr(parent, { x: pos.x - 500, y: pos.y - 210 });
+  wire(parent, pcPopLow2.out, pcLoadLow.a);
+  tieToLabel('IM2_READ_LO_NOW', pcLoadLow.b, { x: pos.x - 600, y: pos.y - 210 });
+  tieToLabel('PC_LOAD_LOW_NOW', pcLoadLow.out, { x: pos.x - 450, y: pos.y - 210 });
+  const pcLoadHigh = buildOr(parent, { x: pos.x - 500, y: pos.y - 190 });
+  tieToLabel('PC_POP_HIGH_NOW', pcLoadHigh.a, { x: pos.x - 600, y: pos.y - 190 });
+  tieToLabel('IM2_READ_HI_NOW', pcLoadHigh.b, { x: pos.x - 600, y: pos.y - 170 });
+  tieToLabel('PC_LOAD_HIGH_NOW', pcLoadHigh.out, { x: pos.x - 450, y: pos.y - 190 });
+
   // One PC_COMMIT_BIT chip per PC bit — same MUX cascade as the former
   // inline forEach (RET→…→IM2 hi); labels stay on the parent.
   const pcCommitBitDef = getPcCommitBitChip(library);
@@ -9132,13 +9219,13 @@ function buildZ80CpuInner(
     const bit = makeChipInstance(parent, pcCommitBitDef, { x: pos.x - 400, y: pos.y - 300 - i * 100 });
     const port = (idx: number) => bit.pins[pcCommitBitDef.ports[idx]!]!;
     // sels
-    tieToLabel('RET_OR_RETI_NOW', port(0), { x: pos.x - 500, y: pos.y - 280 - i * 100 });
+    tiePowerRail(parent, 'GND', port(0)); // selRet: RET loads PC in halves, see PC_LOAD_LOW_NOW
     wire(parent, rstJumpNow.out, port(1));
     tieToLabel('JP_JUMP_NOW', port(2), { x: pos.x - 150, y: pos.y - 300 - i * 100 });
     tieToLabel('CALL_JUMP_NOW', port(3), { x: pos.x - 50, y: pos.y - 300 - i * 100 });
     tieToLabel('JPCC_JUMP_NOW', port(4), { x: pos.x + 50, y: pos.y - 300 - i * 100 });
     tieToLabel('CALLCC_JUMP_NOW', port(5), { x: pos.x + 150, y: pos.y - 300 - i * 100 });
-    tieToLabel('RETCC_TAKEN_NOW', port(6), { x: pos.x + 250, y: pos.y - 300 - i * 100 });
+    tiePowerRail(parent, 'GND', port(6)); // selRetCc: same
     tieToLabel('JR_JUMP_NOW', port(7), { x: pos.x + 350, y: pos.y - 300 - i * 100 });
     tieToLabel('JPHL_NOW', port(8), { x: pos.x + 400, y: pos.y - 300 - i * 100 });
     tieToLabel('JPIX_NOW', port(9), { x: pos.x + 420, y: pos.y - 300 - i * 100 });
@@ -9148,8 +9235,8 @@ function buildZ80CpuInner(
     tieToLabel('INBLOCK_REPEAT_NOW', port(13), { x: pos.x + 550, y: pos.y - 320 - i * 100 });
     tieToLabel('OUTBLOCK_REPEAT_NOW', port(14), { x: pos.x + 600, y: pos.y - 320 - i * 100 });
     tieToLabel('NMI_JUMP_NOW', port(15), { x: pos.x + 650, y: pos.y - 320 - i * 100 });
-    tieToLabel('IM2_READ_LO_NOW', port(16), { x: pos.x + 700, y: pos.y - 320 - i * 100 });
-    tieToLabel('IM2_READ_HI_NOW', port(17), { x: pos.x + 750, y: pos.y - 320 - i * 100 });
+    tieToLabel('PC_LOAD_LOW_NOW', port(16), { x: pos.x + 700, y: pos.y - 320 - i * 100 });
+    tieToLabel('PC_LOAD_HIGH_NOW', port(17), { x: pos.x + 750, y: pos.y - 320 - i * 100 });
     // data
     wire(parent, q, port(18)); // hold
     tieToLabel(`BUS${i}`, port(19), { x: pos.x - 500, y: pos.y - 300 - i * 100 }); // bus (RET / RET cc)
@@ -9331,58 +9418,28 @@ function buildZ80CpuInner(
     tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 2250 + i * 20 });
   }
 
-  // RST's own push data: PC's current value (the return address, already
-  // past RST's own opcode — INCREMENT runs before EXEC1) drives the bus
-  // during rstNow, the same way a push pair's high/low byte does. Found
-  // live: this bank was missing entirely on the first pass — RST correctly
-  // decremented SP and picked the right RAM address (both gated only by
-  // stackWriteNow/rstNow, no data source needed), so nothing *looked*
-  // wrong until RET actually tried to read the pushed byte back and got
-  // whatever `ir.d` had last held (stale/garbage), not PC.
-  pc.q.forEach((_, i) => {
+  // Return-address push data, shared by RST, CALL nn, CALL cc,nn, NMI and IM2:
+  // two phases, high byte first, like PUSH rr, so the return address is a whole
+  // word on the stack whatever the PC width. The first phase writes PC's high
+  // byte (bits above 7, zero when PC is narrower) and at the same edge captures
+  // PC into `retAddr`; the second writes `retAddr`'s low byte. Sourcing the low
+  // byte from the capture register rather than PC lets the jump (or the restart
+  // target load) share that edge: the RAM write samples the settled post-edge
+  // state, and PC has already moved by then.
+  for (let i = 0; i < 8; i++) {
     const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 1900 + i * 20 });
-    tieToLabel(`REGPC${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 1900 + i * 20 });
-    wire(parent, rstNow.out, buf.pins[bufDef.ports[1]!]!);
+    if (i + 8 < addrBits) tieToLabel(`REGPC${i + 8}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 1900 + i * 20 });
+    else tiePowerRail(parent, 'GND', buf.pins[bufDef.ports[0]!]!);
+    tieToLabel('RETADDR_PUSH_HIGH_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 1920 + i * 20 });
     tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 1900 + i * 20 });
-  });
-  // NMI push data: same PC→bus bank as RST, gated by NMI_PUSH_NOW (PHASE2
-  // while nmiServing — PC still at the interrupted instruction).
-  pc.q.forEach((_, i) => {
-    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 2050 + i * 20 });
-    tieToLabel(`REGPC${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 2050 + i * 20 });
-    tieToLabel('NMI_PUSH_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 2070 + i * 20 });
-    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 2050 + i * 20 });
-  });
-  // IM2 push data: identical PC→bus bank, gated by IM2_PUSH_NOW.
-  pc.q.forEach((_, i) => {
-    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 1970 + i * 20 });
-    tieToLabel(`REGPC${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 1970 + i * 20 });
-    tieToLabel('IM2_PUSH_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 1990 + i * 20 });
-    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 1970 + i * 20 });
-  });
-
-  // CALL nn's own push data: the identical bank, gated by CALL_PUSH_NOW
-  // instead of rstNow — PC's current value at that point is already the
-  // return address (both operand-byte advances, PHASE3/PHASE5, already
-  // ran), the same "PC is already past its own opcode" fact RST's own
-  // bank above relies on.
-  pc.q.forEach((_, i) => {
-    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 2400 + i * 20 });
-    tieToLabel(`REGPC${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 2400 + i * 20 });
-    tieToLabel('CALL_PUSH_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 2420 + i * 20 });
-    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 2400 + i * 20 });
-  });
-
-  // CALL cc,nn's own push data: the identical bank CALL nn's own uses,
-  // gated by CALLCC_PUSH_NOW instead — PC's current value at that point is
-  // already the return address, the same "PC is already past its own
-  // opcode" fact RST's and CALL nn's own banks above rely on.
-  pc.q.forEach((_, i) => {
-    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 2900 + i * 20 });
-    tieToLabel(`REGPC${i}`, buf.pins[bufDef.ports[0]!]!, { x: pos.x + 11000, y: pos.y + 2900 + i * 20 });
-    tieToLabel('CALLCC_PUSH_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 2920 + i * 20 });
-    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 2900 + i * 20 });
-  });
+  }
+  for (let i = 0; i < 8; i++) {
+    const buf = makeChipInstance(parent, bufDef, { x: pos.x + 11100, y: pos.y + 2100 + i * 20 });
+    if (i < addrBits) wire(parent, retAddr.q[i]!, buf.pins[bufDef.ports[0]!]!);
+    else tiePowerRail(parent, 'GND', buf.pins[bufDef.ports[0]!]!);
+    tieToLabel('RETADDR_PUSH_LOW_NOW', buf.pins[bufDef.ports[1]!]!, { x: pos.x + 11000, y: pos.y + 2120 + i * 20 });
+    tieToLabel(`BUS${i}`, buf.pins[bufDef.ports[2]!]!, { x: pos.x + 11200, y: pos.y + 2100 + i * 20 });
+  }
 
   // Indirect loads' own write data (see "x=00: indirect loads through
   // (BC)/(DE)/(nn)" above): `A` onto the bus for `LD (BC),A`/`LD (DE),A`/
@@ -11512,6 +11569,7 @@ function buildZ80CpuInner(
   tieToLabel('CLK', callTarget.clk, { x: pos.x - 700, y: pos.y - 3060 }); // learned from jpTarget's own missing-CLK bug above — every new register in this file gets this checked off explicitly now, not assumed
   tieToLabel('CLK', jpCcTarget.clk, { x: pos.x - 700, y: pos.y - 3960 });
   tieToLabel('CLK', callCcTarget.clk, { x: pos.x - 700, y: pos.y - 4860 });
+  tieToLabel('CLK', retAddr.clk, { x: pos.x - 700, y: pos.y - 5560 });
 
   // LDI's own register commits (see "x=10, y=4, z=0: LDI" above) — one
   // more `wrapWithPairCommit` layer on top of each of `B`/`C`/`D`/`E`/`H`/

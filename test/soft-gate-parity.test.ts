@@ -18,16 +18,15 @@ import type { Pin } from '../src/sim/types.js';
  * - P/V (bit 2): soft ALU/INC/DEC uses parity; gate uses signed overflow for
  *   arithmetic. Documented bits S/Z/H/N/C are compared.
  *
- * Soft runs with `addrBits=7` + `gateCallStack` so CALL/RET/RST match the
- * gate's single-byte return stack; PUSH/POP qq and EX (SP),HL stay two-byte
- * on both sides. `gateCatchUp` advances rings until PC and SP match after
- * each softStep.
+ * Soft runs with `addrBits=7`; CALL/RET/RST, PUSH/POP qq and EX (SP),HL all
+ * use two-byte stack words on both sides. `gateCatchUp` advances rings until
+ * PC and SP match after each softStep.
  */
 const FLAG_MASK = 0xd3; // S Z - H - - N C  (exclude Y=0x20, X=0x08, P/V=0x04)
 const ADDR_BITS = 7;
 const ADDR_MASK = (1 << ADDR_BITS) - 1;
 const SP0 = 0x60;
-const PARITY_HOOKS: SoftMemHooks = { addrBits: ADDR_BITS, gateCallStack: true };
+const PARITY_HOOKS: SoftMemHooks = { addrBits: ADDR_BITS };
 
 interface Snapshot {
   a: number;

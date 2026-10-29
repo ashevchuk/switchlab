@@ -14,19 +14,18 @@ describe('buildZ80Cpu — x=11: CALL nn (subroutine call and return)', () => {
    * place" (already covered by "x=11: JP nn") — it's "the *existing* RET
    * mechanism, built for RST long before CALL nn existed, can pop the
    * address CALL nn pushed." A genuine CALL -> subroutine -> RET -> resume
-   * round trip: `SP` is checked decrementing by exactly one on the call
-   * and incrementing by exactly one on the return (the concrete proof
-   * `CALL nn` pushes a *single* stack byte, matching `RET`'s own single-
-   * byte read — see "x=11: CALL nn" for why pushing two would have broken
-   * every `RET` in this project silently), and the resumed main flow
+   * round trip: `SP` is checked decrementing by exactly two on the call
+   * and incrementing by exactly two on the return (the return address is
+   * a whole word on the stack, as on a real Z80 — return addresses above
+   * 0xFF are covered by z80cpu-return-address-16bit), and the resumed main flow
    * (`LD A,0x99` at address 3, right after `CALL`'s own 3 bytes) only runs
    * — and only leaves `A` as `0x99` — if `RET` truly landed back at the
    * instruction *after* `CALL`, not merely *some* address.
    *
-   *  0: 0xCD,0x10,0x00  CALL 0x0010   push return addr (3), PC <- 0x10, SP - 1
+   *  0: 0xCD,0x10,0x00  CALL 0x0010   push return addr (3), PC <- 0x10, SP - 2
    *  3: 0x3E,0x99       LD A,0x99     (main flow, resumed after RET) A <- 0x99
    * 16: 0x3E,0x42       LD A,0x42     (subroutine) A <- 0x42 — proves the call landed here
-   * 18: 0xC9            RET           pop the stack back into PC (3), SP + 1
+   * 18: 0xC9            RET           pop the stack back into PC (3), SP + 2
    */
   const ADDR_BITS = 6;
   const SP0 = 32;
@@ -46,8 +45,8 @@ describe('buildZ80Cpu — x=11: CALL nn (subroutine call and return)', () => {
     pc: number;
   }
   const EXPECTED: Snapshot[] = [
-    { a: 0x00, sp: SP0 - 1, pc: 0x10 }, // CALL 0x0010 — A untouched, SP decremented once, PC redirected
-    { a: 0x42, sp: SP0 - 1, pc: 18 }, // LD A,0x42 (the subroutine) — proves the call landed exactly here
+    { a: 0x00, sp: SP0 - 2, pc: 0x10 }, // CALL 0x0010 — A untouched, SP decremented by two, PC redirected
+    { a: 0x42, sp: SP0 - 2, pc: 18 }, // LD A,0x42 (the subroutine) — proves the call landed exactly here
     { a: 0x42, sp: SP0, pc: 3 }, // RET — SP back to where CALL found it, PC back to right after CALL's own 3 bytes
     { a: 0x99, sp: SP0, pc: 5 }, // LD A,0x99 (main flow, resumed) — proves RET returned to the right place, not just some place
   ];
@@ -59,7 +58,7 @@ describe('buildZ80Cpu — x=11: CALL nn (subroutine call and return)', () => {
     return Array.from({ length: width }, (_, i) => ((n >> i) & 1) as 0 | 1);
   }
 
-  it('pushes a single-byte return address, jumps to the subroutine, and RET pops it back to resume the right instruction', () => {
+  it('pushes the return address, jumps to the subroutine, and RET pops it back to resume the right instruction', () => {
     const library = new ChipLibrary();
     const parent = new Circuit();
     const cpu = buildZ80Cpu(parent, library, ADDR_BITS, PROGRAM);
@@ -154,11 +153,11 @@ describe('buildZ80Cpu — x=11: CALL nn (subroutine call and return)', () => {
     const runInstruction = () => {
       pulse(phaseClk); // -> INCREMENT
       pulse(dataClk);
-      pulse(phaseClk); // -> EXEC1 (read low byte / RET's own single-byte pop, depending on the opcode)
+      pulse(phaseClk); // -> EXEC1 (read low byte / RET's pop of the return address's low byte, depending on the opcode)
       pulse(dataClk);
       pulse(phaseClk); // -> EXEC2 (advance PC, a no-op for RET)
       pulse(dataClk);
-      pulse(phaseClk); // -> EXEC3 (read high byte, a no-op for RET)
+      pulse(phaseClk); // -> EXEC3 (read high byte / RET's pop of the return address's high byte)
       pulse(dataClk);
       pulse(phaseClk); // -> EXEC4 (advance PC a second time, a no-op for RET)
       pulse(dataClk);

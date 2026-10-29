@@ -26,22 +26,22 @@ describe('buildZ80Cpu — x=11: RET cc (conditional return)', () => {
    * rather than derailing.
    *
    *  0: 0xAF               XOR A,A       A <- 0, F <- 0x44 (Z=1, C=0)
-   *  1: 0xCD,0x40,0x00     CALL 0x40     push ret=4, PC <- 0x40, SP - 1
+   *  1: 0xCD,0x40,0x00     CALL 0x40     push ret=4, PC <- 0x40, SP - 2
    *  4: 0x3E,0x11          LD A,0x11     (resumed after RET Z) A <- 0x11
-   *  6: 0xCD,0x50,0x00     CALL 0x50     push ret=9, PC <- 0x50, SP - 1
+   *  6: 0xCD,0x50,0x00     CALL 0x50     push ret=9, PC <- 0x50, SP - 2
    *  9: 0x3E,0x22          LD A,0x22     (resumed after the plain RET) A <- 0x22
    * 11: 0x3E,0x80          LD A,0x80     A <- 0x80
    * 13: 0x87               ADD A,A       A <- 0x00, F <- 0x45 (Z=1, C=1)
-   * 14: 0xCD,0x60,0x00     CALL 0x60     push ret=17, PC <- 0x60, SP - 1
+   * 14: 0xCD,0x60,0x00     CALL 0x60     push ret=17, PC <- 0x60, SP - 2
    * 17: 0x3E,0x33          LD A,0x33     (resumed after RET C) A <- 0x33
-   * 19: 0xCD,0x70,0x00     CALL 0x70     push ret=22, PC <- 0x70, SP - 1
+   * 19: 0xCD,0x70,0x00     CALL 0x70     push ret=22, PC <- 0x70, SP - 2
    * 22: 0x3E,0x44          LD A,0x44     (resumed after the plain RET) A <- 0x44
-   * 64: 0xC8               RET Z         Z=1: taken -> pop PC <- 4, SP + 1
+   * 64: 0xC8               RET Z         Z=1: taken -> pop PC <- 4, SP + 2
    * 80: 0xC0               RET NZ        Z=1: NOT taken -> fall through
-   * 81: 0xC9               RET           pop PC <- 9, SP + 1
-   * 96: 0xD8               RET C         C=1: taken -> pop PC <- 17, SP + 1
+   * 81: 0xC9               RET           pop PC <- 9, SP + 2
+   * 96: 0xD8               RET C         C=1: taken -> pop PC <- 17, SP + 2
    *112: 0xD0               RET NC        C=1: NOT taken -> fall through
-   *113: 0xC9               RET           pop PC <- 22, SP + 1
+   *113: 0xC9               RET           pop PC <- 22, SP + 2
    */
   const ADDR_BITS = 8;
   const SP0 = 200;
@@ -72,20 +72,20 @@ describe('buildZ80Cpu — x=11: RET cc (conditional return)', () => {
   }
   const EXPECTED: Snapshot[] = [
     { a: 0x00, sp: SP0, pc: 1 }, // XOR A,A
-    { a: 0x00, sp: SP0 - 1, pc: 64 }, // CALL 0x40
+    { a: 0x00, sp: SP0 - 2, pc: 64 }, // CALL 0x40
     { a: 0x00, sp: SP0, pc: 4 }, // RET Z — taken
     { a: 0x11, sp: SP0, pc: 6 }, // LD A,0x11
-    { a: 0x11, sp: SP0 - 1, pc: 80 }, // CALL 0x50
-    { a: 0x11, sp: SP0 - 1, pc: 81 }, // RET NZ — not taken, SP untouched
+    { a: 0x11, sp: SP0 - 2, pc: 80 }, // CALL 0x50
+    { a: 0x11, sp: SP0 - 2, pc: 81 }, // RET NZ — not taken, SP untouched
     { a: 0x11, sp: SP0, pc: 9 }, // RET (plain) — unwinds the frame RET NZ left alone
     { a: 0x22, sp: SP0, pc: 11 }, // LD A,0x22
     { a: 0x80, sp: SP0, pc: 13 }, // LD A,0x80
     { a: 0x00, sp: SP0, pc: 14 }, // ADD A,A
-    { a: 0x00, sp: SP0 - 1, pc: 96 }, // CALL 0x60
+    { a: 0x00, sp: SP0 - 2, pc: 96 }, // CALL 0x60
     { a: 0x00, sp: SP0, pc: 17 }, // RET C — taken
     { a: 0x33, sp: SP0, pc: 19 }, // LD A,0x33
-    { a: 0x33, sp: SP0 - 1, pc: 112 }, // CALL 0x70
-    { a: 0x33, sp: SP0 - 1, pc: 113 }, // RET NC — not taken, SP untouched
+    { a: 0x33, sp: SP0 - 2, pc: 112 }, // CALL 0x70
+    { a: 0x33, sp: SP0 - 2, pc: 113 }, // RET NC — not taken, SP untouched
     { a: 0x33, sp: SP0, pc: 22 }, // RET (plain) — unwinds the frame RET NC left alone
     { a: 0x44, sp: SP0, pc: 24 }, // LD A,0x44
   ];

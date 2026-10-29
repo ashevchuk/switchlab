@@ -57,8 +57,9 @@ describe('buildZ80Cpu — NMI + RETN', () => {
     expect(h.readReg(h.cpu.pc)).toBe(0x66);
     expect(h.readReg(h.cpu.iff1)).toBe(0);
     expect(h.readReg(h.cpu.iff2)).toBe(1);
-    expect(h.readReg(h.cpu.sp.q)).toBe(SP0 - 1);
-    expect(h.cpu.ram.bytes[SP0 - 1]).toBe(2);
+    expect(h.readReg(h.cpu.sp.q)).toBe(SP0 - 2);
+    expect(h.cpu.ram.bytes[SP0 - 2]).toBe(2); // return address, low byte
+    expect(h.cpu.ram.bytes[SP0 - 1]).toBe(0); // high byte
 
     h.runInstruction(); // LD B,0x42
     expect(h.readReg(h.cpu.rB.q)).toBe(0x42);

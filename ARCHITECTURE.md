@@ -1109,8 +1109,8 @@ Gate builders no longer take unused `vcc`/`gnd` pins (`buildAnd(circuit,
 pos?)`, etc.); power is always `tiePowerRail` (reuses the circuit's Source
 pins when present). Soft↔gate parity covers unprefixed/CB, ED/DD, and
 stack ops (PUSH/POP, CALL/RET Z/NZ/C/NC, RST, DD PUSH/POP IX, EX (SP),HL)
-via multi-ring `gateCatchUp` on PC+SP; soft uses `addrBits` + `gateCallStack`
-hooks so CALL/RET/RST match the gate's single-byte return stack.
+via multi-ring `gateCatchUp` on PC+SP; soft uses `addrBits` hooks, and
+CALL/RET/RST push and pop whole two-byte return addresses on both sides.
 
 ### Explicitly later
 
@@ -1447,10 +1447,13 @@ it, real hardware included. `EXEC1` handles the high byte (`B`/`D`/`H`/`A`),
 checks `phase[2]`), so every instruction now costs one "wasted" `phaseClk`
 pulse — a real, deliberate simplification (real hardware uses variable
 M-cycle counts per instruction; this slice uses a fixed phase count for
-every instruction, for architectural simplicity). `RET`/`RST n` only need
-`EXEC1` for their own read/push, for a *different* reason: `PC` is only
-`addrBits` wide in this slice (4-6 bits in every test so far, nowhere near
-real Z80's 16), so a return address fits in one stack byte instead of two.
+every instruction, for architectural simplicity). `RET`/`RST n` use both
+phases too: a return address is a whole word on the stack, high byte at the
+higher address, whatever `addrBits` is. `RET` pops the low byte on `EXEC1` and
+the high byte on `EXEC2`, each into its half of `PC`; `RST n`, `CALL nn`,
+`CALL cc,nn`, NMI and IM2 write the high byte and copy `PC` into a capture
+register on the first phase, then write the capture register's low byte on
+the second (the same edge as the jump).
 
 `SP` decrements for `PUSH`/`RST` (stack grows down), increments for
 `POP`/`RET`, via `spAdder` — a *second* `buildAlu` instance (width

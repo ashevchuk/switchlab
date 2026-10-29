@@ -67,8 +67,9 @@ describe('buildZ80Cpu — thin IM1 IRQ', () => {
 
     expect(h.readReg(h.cpu.pc)).toBe(0x38);
     expect(h.readReg(h.cpu.iff2)).toBe(0);
-    expect(h.readReg(h.cpu.sp.q)).toBe(SP0 - 1);
-    expect(h.cpu.ram.bytes[SP0 - 1]).toBe(4);
+    expect(h.readReg(h.cpu.sp.q)).toBe(SP0 - 2);
+    expect(h.cpu.ram.bytes[SP0 - 2]).toBe(4); // return address, low byte
+    expect(h.cpu.ram.bytes[SP0 - 1]).toBe(0); // high byte
 
     h.runInstruction(); // LD B,0x42
     expect(h.readReg(h.cpu.rB.q)).toBe(0x42);

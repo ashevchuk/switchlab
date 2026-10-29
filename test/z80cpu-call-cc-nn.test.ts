@@ -19,7 +19,7 @@ describe('buildZ80Cpu — x=11: CALL cc,nn (conditional subroutine call)', () =>
    * the other 4 conditions share the identical one-hot select tree,
    * argued sufficient there and not re-litigated here), but each *taken*
    * instance here goes all the way through a real CALL -> subroutine ->
-   * RET -> resume round trip, `SP` checked dipping by exactly one and
+   * RET -> resume round trip, `SP` checked dipping by exactly two and
    * recovering exactly back — not just "landed at the right address" the
    * way a bare `JP cc,nn` proof stops at.
    *
@@ -43,21 +43,21 @@ describe('buildZ80Cpu — x=11: CALL cc,nn (conditional subroutine call)', () =>
    * visits.
    *
    *  0: 0xAF               XOR A,A       A <- 0, F <- 0x44 (Z=1, C=0)
-   *  1: 0xCC,0x28,0x00     CALL Z,0x28   Z=1: taken -> push ret=4, PC <- 0x28, SP - 1
+   *  1: 0xCC,0x28,0x00     CALL Z,0x28   Z=1: taken -> push ret=4, PC <- 0x28, SP - 2
    *  4: 0x3E,0x22          LD A,0x22     (resumed after RET) A <- 0x22
    *  6: 0xC4,0x32,0x00     CALL NZ,0x32  Z=1 (still, LD doesn't touch flags): NOT taken -> fall through
    *  9: 0x3E,0x33          LD A,0x33     A <- 0x33
    * 11: 0x87               ADD A,A       A <- 0x66, F <- 0x04 (Z=0, C=0)
    * 12: 0xDC,0x3C,0x00     CALL C,0x3C   C=0: NOT taken -> fall through
    * 15: 0x3E,0x55          LD A,0x55     A <- 0x55
-   * 17: 0xD4,0x46,0x00     CALL NC,0x46  C=0: taken -> push ret=20, PC <- 0x46, SP - 1
+   * 17: 0xD4,0x46,0x00     CALL NC,0x46  C=0: taken -> push ret=20, PC <- 0x46, SP - 2
    * 20: 0x3E,0x66          LD A,0x66     (resumed after RET) A <- 0x66
    * 40: 0x3E,0x11          LD A,0x11     (subroutine 1) A <- 0x11 — proves CALL Z landed here
-   * 42: 0xC9               RET           pop PC back to 4, SP + 1
+   * 42: 0xC9               RET           pop PC back to 4, SP + 2
    * 50: 0x3E,0xEE          LD A,0xEE     (trap — reached only if CALL NZ wrongly jumped)
    * 60: 0x3E,0xEE          LD A,0xEE     (trap — reached only if CALL C wrongly jumped)
    * 70: 0x3E,0x77          LD A,0x77     (subroutine 2) A <- 0x77 — proves CALL NC landed here
-   * 72: 0xC9               RET           pop PC back to 20, SP + 1
+   * 72: 0xC9               RET           pop PC back to 20, SP + 2
    */
   const ADDR_BITS = 7;
   const SP0 = 100;
@@ -89,8 +89,8 @@ describe('buildZ80Cpu — x=11: CALL cc,nn (conditional subroutine call)', () =>
   }
   const EXPECTED: Snapshot[] = [
     { a: 0x00, sp: SP0, pc: 1 }, // XOR A,A
-    { a: 0x00, sp: SP0 - 1, pc: 40 }, // CALL Z,0x28 — taken
-    { a: 0x11, sp: SP0 - 1, pc: 42 }, // LD A,0x11 (subroutine 1)
+    { a: 0x00, sp: SP0 - 2, pc: 40 }, // CALL Z,0x28 — taken
+    { a: 0x11, sp: SP0 - 2, pc: 42 }, // LD A,0x11 (subroutine 1)
     { a: 0x11, sp: SP0, pc: 4 }, // RET — back to right after CALL Z's own 3 bytes
     { a: 0x22, sp: SP0, pc: 6 }, // LD A,0x22 (resumed main flow)
     { a: 0x22, sp: SP0, pc: 9 }, // CALL NZ,0x32 — not taken, fell through, no push
@@ -98,8 +98,8 @@ describe('buildZ80Cpu — x=11: CALL cc,nn (conditional subroutine call)', () =>
     { a: 0x66, sp: SP0, pc: 12 }, // ADD A,A
     { a: 0x66, sp: SP0, pc: 15 }, // CALL C,0x3C — not taken, fell through, no push
     { a: 0x55, sp: SP0, pc: 17 }, // LD A,0x55
-    { a: 0x55, sp: SP0 - 1, pc: 70 }, // CALL NC,0x46 — taken
-    { a: 0x77, sp: SP0 - 1, pc: 72 }, // LD A,0x77 (subroutine 2)
+    { a: 0x55, sp: SP0 - 2, pc: 70 }, // CALL NC,0x46 — taken
+    { a: 0x77, sp: SP0 - 2, pc: 72 }, // LD A,0x77 (subroutine 2)
     { a: 0x77, sp: SP0, pc: 20 }, // RET — back to right after CALL NC's own 3 bytes
     { a: 0x66, sp: SP0, pc: 22 }, // LD A,0x66 (resumed main flow)
   ];

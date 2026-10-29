@@ -28,9 +28,9 @@ describe("buildZ80Cpu — flags, SP, PUSH/POP, RET, RST n (x=11's real subset)",
    *   5: 0x4B  LD C,E     corrupt C <- E (0x44)
    *   6: 0xC1  POP BC     restore B,C to their original (pre-corruption) values — SP 56->58
    *   7: 0xF1  POP AF     restore A,F to their post-ADD values — SP 58->60
-   *   8: 0xF7  RST 30H    push PC (=9, past this opcode) to the stack, jump to 48 — SP 60->59
+   *   8: 0xF7  RST 30H    push PC (=9, past this opcode) to the stack as a word, jump to 48 — SP 60->58
    *  48: 0x5F  LD E,A     (subroutine) E <- A = 0x11 — proves the jump actually landed here
-   *  49: 0xC9  RET        pop the stack back into PC (=9) — SP 59->60
+   *  49: 0xC9  RET        pop the stack back into PC (=9) — SP 58->60
    *   9: 0x57  LD D,A     (main flow, resumed) D <- A = 0x11 — proves RET returned to the right place,
    *                       not just to *some* place — a wrong RET target would fetch a different opcode
    *                       here and D would end up with something other than A's own value
@@ -72,7 +72,7 @@ describe("buildZ80Cpu — flags, SP, PUSH/POP, RET, RST n (x=11's real subset)",
     { a: 0x00, b: 0x33, c: 0x44, d: 0x33, e: 0x44, f: 0x44, sp: 56, pc: 6 }, // LD C,E
     { a: 0x00, b: 0x11, c: 0x22, d: 0x33, e: 0x44, f: 0x44, sp: 58, pc: 7 }, // POP BC
     { a: 0x11, b: 0x11, c: 0x22, d: 0x33, e: 0x44, f: 0x00, sp: 60, pc: 8 }, // POP AF
-    { a: 0x11, b: 0x11, c: 0x22, d: 0x33, e: 0x44, f: 0x00, sp: 59, pc: 48 }, // RST 30H (jumped!)
+    { a: 0x11, b: 0x11, c: 0x22, d: 0x33, e: 0x44, f: 0x00, sp: 58, pc: 48 }, // RST 30H (jumped!)
   ];
 
   function fromBits(bits: Level[]): number {
@@ -211,7 +211,7 @@ describe("buildZ80Cpu — flags, SP, PUSH/POP, RET, RST n (x=11's real subset)",
 
     // The subroutine RST 30H just jumped to: LD E,A, then RET.
     runInstruction(); // LD E,A (at address 48)
-    expect(snapshot()).toEqual({ a: 0x11, b: 0x11, c: 0x22, d: 0x33, e: 0x11, f: 0x00, sp: 59, pc: 49 });
+    expect(snapshot()).toEqual({ a: 0x11, b: 0x11, c: 0x22, d: 0x33, e: 0x11, f: 0x00, sp: 58, pc: 49 });
     runInstruction(); // RET (at address 49)
     expect(snapshot()).toEqual({ a: 0x11, b: 0x11, c: 0x22, d: 0x33, e: 0x11, f: 0x00, sp: 60, pc: 9 });
 
