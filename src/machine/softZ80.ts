@@ -63,11 +63,6 @@ export interface SoftMemHooks {
    * parity harnesses (addrBits=7 → 128-byte RAM).
    */
   addrBits?: number;
-  /**
-   * When set with `addrBits`, CALL/RET/RST push/pop a single return byte
-   * (gate scale). PUSH/POP qq and DD/FD IX/IY stay two-byte.
-   */
-  gateCallStack?: boolean;
   /** When true, ignore writes to 0000–3FFF (Spectrum ROM). */
   romProtect?: boolean;
   /**
@@ -309,24 +304,6 @@ function pop(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): number {
   const v = read16(ram, cpu.sp, hooks);
   cpu.sp = uAddr(cpu.sp + 2, hooks);
   return v;
-}
-
-/** CALL/RET/RST stack — 1 byte when `gateCallStack`, else full 16-bit push/pop. */
-function pushReturn(cpu: SoftZ80State, ram: Uint8Array, v: number, hooks?: SoftMemHooks): void {
-  if (hooks?.gateCallStack) {
-    cpu.sp = uAddr(cpu.sp - 1, hooks);
-    memWrite(ram, cpu.sp, v & 0xff, hooks);
-    return;
-  }
-  push(cpu, ram, v, hooks);
-}
-function popReturn(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): number {
-  if (hooks?.gateCallStack) {
-    const v = memRead(ram, cpu.sp, hooks);
-    cpu.sp = uAddr(cpu.sp + 1, hooks);
-    return v;
-  }
-  return pop(cpu, ram, hooks);
 }
 
 function fetch(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): number {
@@ -633,13 +610,13 @@ function execEd(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): void 
 
   // RETN (45/55/65/75) — restore IFF1 from IFF2
   if ((op & 0xc7) === 0x45) {
-    cpu.pc = uAddr(popReturn(cpu, ram, hooks), hooks);
+    cpu.pc = uAddr(pop(cpu, ram, hooks), hooks);
     cpu.iff1 = cpu.iff2;
     return;
   }
   // RETI (4D/5D/6D/7D)
   if ((op & 0xc7) === 0x4d) {
-    cpu.pc = uAddr(popReturn(cpu, ram, hooks), hooks);
+    cpu.pc = uAddr(pop(cpu, ram, hooks), hooks);
     return;
   }
 
@@ -962,7 +939,7 @@ function execOpcode(
   if (op === 0xcd || (op & 0xc7) === 0xc4) {
     const nn = fetch16(cpu, ram, hooks);
     if (op === 0xcd || cond(cpu, (op >> 3) & 7)) {
-      pushReturn(cpu, ram, cpu.pc, hooks);
+      push(cpu, ram, cpu.pc, hooks);
       cpu.pc = uAddr(nn, hooks);
     }
     return true;
@@ -970,7 +947,7 @@ function execOpcode(
 
   // RET / RET cc
   if (op === 0xc9 || (op & 0xc7) === 0xc0) {
-    if (op === 0xc9 || cond(cpu, (op >> 3) & 7)) cpu.pc = uAddr(popReturn(cpu, ram, hooks), hooks);
+    if (op === 0xc9 || cond(cpu, (op >> 3) & 7)) cpu.pc = uAddr(pop(cpu, ram, hooks), hooks);
     return true;
   }
 
@@ -1158,7 +1135,7 @@ function execOpcode(
 
   // RST
   if ((op & 0xc7) === 0xc7) {
-    pushReturn(cpu, ram, cpu.pc, hooks);
+    push(cpu, ram, cpu.pc, hooks);
     cpu.pc = uAddr(op & 0x38, hooks);
     return true;
   }
@@ -1254,7 +1231,7 @@ export function softAcceptIrq(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMe
   // INTACK: one R bump (M1 acknowledge) + Spectrum-style ~2 wait states, then push.
   bumpR(cpu);
   hooks?.intAckWaits?.(4);
-  pushReturn(cpu, ram, cpu.pc, hooks);
+  push(cpu, ram, cpu.pc, hooks);
   if (cpu.im === 1) {
     cpu.pc = uAddr(0x0038, hooks);
   } else if (cpu.im === 2) {
@@ -1279,7 +1256,7 @@ export function softAcceptIrq(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMe
 export function softNmi(cpu: SoftZ80State, ram: Uint8Array, hooks?: SoftMemHooks): void {
   cpu.halted = false;
   cpu.iff1 = false;
-  pushReturn(cpu, ram, cpu.pc, hooks);
+  push(cpu, ram, cpu.pc, hooks);
   cpu.pc = uAddr(0x0066, hooks);
 }
 
