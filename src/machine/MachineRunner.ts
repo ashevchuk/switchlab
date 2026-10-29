@@ -1239,31 +1239,38 @@ export class MachineRunner {
       }
       return true;
     }
-    const maxPhases = PHASES_PER_FRAME[this.speed as Exclude<RunSpeed, 'soft'>];
-    const budgetMs = this.speed === 'free' ? FREE_BUDGET_MS : GATE_BUDGET_MS;
-    const deadline = performance.now() + budgetMs;
-    let n = 0;
-    if (this.spectrum) this.spectrum.pulseFrameIrq();
-    if (this.isSpectrum) this.mirrorSpectrumToGateRam();
-    let instrIrqPending = false;
-    let instrIff1WasOn = false;
-    while (n < maxPhases && performance.now() < deadline && this.running) {
-      if (n % 10 === 0) {
-        instrIrqPending = !!(this.spectrum?.irqPending);
-        instrIff1WasOn =
-          !!this.cpu && !!this.readPin && this.readPin(this.cpu.iff1[0]!) === 1;
-        this.syncSpectrumGateInt();
+    try {
+      const maxPhases = PHASES_PER_FRAME[this.speed as Exclude<RunSpeed, 'soft'>];
+      const budgetMs = this.speed === 'free' ? FREE_BUDGET_MS : GATE_BUDGET_MS;
+      const deadline = performance.now() + budgetMs;
+      let n = 0;
+      if (this.spectrum) this.spectrum.pulseFrameIrq();
+      if (this.isSpectrum) this.mirrorSpectrumToGateRam();
+      let instrIrqPending = false;
+      let instrIff1WasOn = false;
+      while (n < maxPhases && performance.now() < deadline && this.running) {
+        if (n % 10 === 0) {
+          instrIrqPending = !!(this.spectrum?.irqPending);
+          instrIff1WasOn =
+            !!this.cpu && !!this.readPin && this.readPin(this.cpu.iff1[0]!) === 1;
+          this.syncSpectrumGateInt();
+        }
+        this.stepPhase();
+        n++;
+        if (n % 10 === 0) {
+          this.clearSpectrumIrqIfAccepted(instrIrqPending, instrIff1WasOn);
+          this.stopIfGateHalted();
+        }
       }
-      this.stepPhase();
-      n++;
-      if (n % 10 === 0) {
-        this.clearSpectrumIrqIfAccepted(instrIrqPending, instrIff1WasOn);
-        this.stopIfGateHalted();
-      }
+      if (this.isSpectrum && n > 0) this.writeBackSpectrumDisplayFromGateRam();
+      this.stopIfGateHalted();
+      return n > 0;
+    } catch (e) {
+      this.running = false;
+      this.softError = e instanceof Error ? e.message : String(e);
+      console.error(e);
+      return true;
     }
-    if (this.isSpectrum && n > 0) this.writeBackSpectrumDisplayFromGateRam();
-    this.stopIfGateHalted();
-    return n > 0;
   }
 
   setRunning(on: boolean): void {

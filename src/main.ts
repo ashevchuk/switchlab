@@ -79,6 +79,8 @@ import { IoMapViewer } from './ui/IoMapViewer.js';
 import { draw } from './ui/Renderer.js';
 import { makeSoftCanvasResolve } from './ui/softCanvasResolve.js';
 import { chipBoxSize, isOrientable, memoryBoxSize, orientSelection } from './sim/orientation.js';
+import { describeError, type ErrorSource } from './ui/errorReport.js';
+import { showErrorToast } from './ui/Toast.js';
 import {
   showContextMenu,
   hideContextMenu,
@@ -3436,6 +3438,20 @@ function readTinyPc(chip: ChipInstanceComponent): number | null {
   return pc;
 }
 
+const reportedErrors = new Set<string>();
+
+/** Toast the error and log it once per distinct problem, so a failing frame does not flood the console at 60 Hz. */
+function reportError(err: unknown, source: ErrorSource): void {
+  const report = describeError(err, source);
+  if (!reportedErrors.has(report.key)) {
+    reportedErrors.add(report.key);
+    console.error(err);
+  }
+  showErrorToast(report);
+}
+
+let lastReportedMachineError: string | null = null;
+
 /**
  * While a gate-level machine runs, redrawing a 100k-transistor sheet every frame
  * costs more than the phases themselves. Leave at least this many times the last
@@ -3445,7 +3461,7 @@ const GATE_RUN_REDRAW_GAP_FACTOR = 3;
 let lastRedrawMs = 0;
 let lastRedrawEndMs = 0;
 
-function frame(): void {
+function runFrame(): void {
   syncInspector();
   if (tutorial.active) tutorial.tick(editor.circuit);
   // Catch Insert-menu / paste / clear mutations that skip onBeforeEdit.
@@ -3461,6 +3477,10 @@ function frame(): void {
   let machineWorked = false;
   if (machineRunner.running) {
     machineWorked = machineRunner.tickBudget();
+  }
+  if (machineRunner.softError !== lastReportedMachineError) {
+    lastReportedMachineError = machineRunner.softError;
+    if (lastReportedMachineError) reportError(lastReportedMachineError, 'machine');
   }
   if (memoryEditor.attached) {
     const tinyCpu = memoryEditor.memory?.kind === 'ram' ? tinyCpuForRam(topCircuit, library, memoryEditor.memory) : undefined;
@@ -3667,6 +3687,19 @@ function frame(): void {
     ioMapViewer.attach(machineRunner.machineRam);
     ioMapViewer.draw();
   }
-  requestAnimationFrame(frame);
+}
+
+/** A frame that throws must not end the loop: the next one is always scheduled. */
+function frame(): void {
+  try {
+    runFrame();
+  } catch (err) {
+    reportError(err, 'frame');
+  } finally {
+    requestAnimationFrame(frame);
+  }
 }
 requestAnimationFrame(frame);
+
+window.addEventListener('error', (ev) => reportError(ev.error ?? ev.message, 'script'));
+window.addEventListener('unhandledrejection', (ev) => reportError(ev.reason, 'promise'));
