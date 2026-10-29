@@ -37,6 +37,17 @@ test.describe('error reporting', () => {
     await expect(toast).toHaveCount(0);
   });
 
+  test('the ResizeObserver notice is not an error, a real one right after it still is', async ({ page }) => {
+    await open(page);
+    await page.evaluate(() => {
+      window.dispatchEvent(new ErrorEvent('error', { message: 'ResizeObserver loop completed with undelivered notifications.' }));
+      setTimeout(() => { throw new Error('a real problem'); });
+    });
+    const toast = page.locator('.app-toast');
+    await expect(toast).toHaveCount(1);
+    await expect(toast).toContainText('a real problem');
+  });
+
   test('the same error twice is one toast with a counter', async ({ page }) => {
     await open(page);
     await page.evaluate(() => {

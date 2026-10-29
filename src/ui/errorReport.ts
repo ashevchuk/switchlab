@@ -76,3 +76,11 @@ export function describeWorkerRecovery(outcome: 'restarted' | 'stopped'): ErrorR
     key: 'worker:stopped',
   };
 }
+
+/**
+ * Browsers report these through window.onerror although nothing is wrong: a ResizeObserver
+ * callback that changes layout again is delivered one frame later, and that is all the message says.
+ */
+export function isBrowserNoise(message: string): boolean {
+  return /^ResizeObserver loop (completed with undelivered notifications|limit exceeded)/.test(message);
+}

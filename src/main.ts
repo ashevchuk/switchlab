@@ -79,7 +79,7 @@ import { IoMapViewer } from './ui/IoMapViewer.js';
 import { draw } from './ui/Renderer.js';
 import { makeSoftCanvasResolve } from './ui/softCanvasResolve.js';
 import { chipBoxSize, isOrientable, memoryBoxSize, orientSelection } from './sim/orientation.js';
-import { describeError, describeWorkerRecovery, type ErrorSource } from './ui/errorReport.js';
+import { describeError, describeWorkerRecovery, isBrowserNoise, type ErrorSource } from './ui/errorReport.js';
 import { showErrorToast } from './ui/Toast.js';
 import {
   showContextMenu,
@@ -3726,5 +3726,8 @@ function frame(): void {
 }
 requestAnimationFrame(frame);
 
-window.addEventListener('error', (ev) => reportError(ev.error ?? ev.message, 'script'));
+window.addEventListener('error', (ev) => {
+  if (isBrowserNoise(ev.message)) return;
+  reportError(ev.error ?? ev.message, 'script');
+});
 window.addEventListener('unhandledrejection', (ev) => reportError(ev.reason, 'promise'));

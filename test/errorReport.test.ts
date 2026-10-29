@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeError } from '../src/ui/errorReport.js';
+import { describeError, isBrowserNoise } from '../src/ui/errorReport.js';
 
 describe('describeError', () => {
   it('keeps the message and names the source', () => {
@@ -36,5 +36,14 @@ describe('describeError', () => {
   it('accepts non-Error values and caps a long message', () => {
     expect(describeError(undefined, 'promise').message).toBe('undefined');
     expect(describeError('x'.repeat(1000), 'promise').message).toHaveLength(300);
+  });
+});
+
+describe('isBrowserNoise', () => {
+  it('recognises the ResizeObserver notices and nothing else', () => {
+    expect(isBrowserNoise('ResizeObserver loop completed with undelivered notifications.')).toBe(true);
+    expect(isBrowserNoise('ResizeObserver loop limit exceeded')).toBe(true);
+    expect(isBrowserNoise('Cannot read properties of undefined')).toBe(false);
+    expect(isBrowserNoise('Uncaught ResizeObserver is not defined')).toBe(false);
   });
 });
