@@ -111,6 +111,7 @@ export class MachinePanel {
   private lastTextMs = 0;
   private static readonly TEXT_INTERVAL_MS = 200;
   private bmpImage: ImageData | null = null;
+  private consoleTitle = '';
   private keyUpHandler: ((e: KeyboardEvent) => void) | null = null;
   private readonly specKbd: SpectrumKeyboard;
   private readonly specJoy: SpectrumJoystick;
@@ -154,7 +155,7 @@ export class MachinePanel {
 
   constructor() {
     this.win = new FloatingWindow('TTY', 'machine-panel');
-    this.win.setTitle('TTY', '80×25 VT100 · resize · 128×64 bmp');
+    this.showConsoleTitle();
     this.root = this.win.body;
     this.root.innerHTML = `
       <div class="machine-panel-controls">
@@ -1607,7 +1608,7 @@ JR spin</textarea>
     // land on Console with a TTY title so a prior Spectrum boot does not leave
     // the Spectrum tab open over an unrelated Soft ROM.
     this.setTab('console');
-    this.win.setTitle('TTY', '80×25 VT100 · resize · 128×64 bmp');
+    this.showConsoleTitle();
     if (!requiresMachineMap(ram.addrBits)) {
       this.hint.textContent = `Need addrBits ≥ 12 (got ${ram.addrBits}).`;
       this.win.setVisible(true);
@@ -1675,7 +1676,7 @@ JR spin</textarea>
     const model = this.runner?.spectrumModel;
     if (model) {
       const trdos = this.runner?.spectrumMmu?.trdosPaged ? ' · TR-DOS* (Beta stub)' : '';
-      this.specModelEl.textContent = `${model}K soft${trdos}`;
+      this.specModelEl.textContent = `${model}K ${this.runner?.isSoft ? 'soft' : 'gates (experimental)'}${trdos}`;
     } else {
       this.specModelEl.textContent = '48K / 128K soft';
     }
@@ -1716,8 +1717,9 @@ JR spin</textarea>
         ? ` · BP=${this.runner!.breakpointPc.toString(16).padStart(4, '0')}`
         : '';
     const err = this.runner!.softError ? ` · !${this.runner!.softError.slice(0, 40)}` : '';
+    const experimental = spec && spd !== 'soft' ? ' · experimental' : '';
     this.writeStatus(
-      `${this.runner!.running ? 'run' : 'pause'} · ${spd}${turbo}${softPc}${desync}${bp}${err}`,
+      `${this.runner!.running ? 'run' : 'pause'} · ${spd}${experimental}${turbo}${softPc}${desync}${bp}${err}`,
     );
     this.btnRun.classList.toggle('active', this.runner!.running);
     this.btnPause.classList.toggle('active', !this.runner!.running);
@@ -1765,6 +1767,13 @@ JR spin</textarea>
     }
   }
 
+  /** The title names the text grid that is actually drawn, not the largest one a machine can have. */
+  private showConsoleTitle(): void {
+    const { cols, rows } = this.textGeometry();
+    this.consoleTitle = `${cols}×${rows} text · 128×64 bitmap`;
+    this.win.setTitle('TTY', this.consoleTitle);
+  }
+
   private drawConsole(): void {
     const { ctx } = this;
     this.ensureConsoleBacking();
@@ -1789,6 +1798,7 @@ JR spin</textarea>
     ctx.fillRect(0, 0, cssW, cssH);
 
     const { cols, rows, size } = this.textGeometry();
+    if (this.consoleTitle !== `${cols}×${rows} text · 128×64 bitmap`) this.showConsoleTitle();
     ctx.font = `12px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
     ctx.textBaseline = 'top';
 

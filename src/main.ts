@@ -52,7 +52,7 @@ import {
   syncSoftExpandForDivePath,
 } from './sim/softLab.js';
 import { decodeShareHash, encodeShareHash } from './sim/shareLink.js';
-import type { AnalyzerComponent, ChipInstanceComponent, Component, Level, Pin, RamComponent, SimState } from './sim/types.js';
+import type { AnalyzerComponent, ChipInstanceComponent, Component, Level, Pin, RamComponent, RomComponent, SimState } from './sim/types.js';
 import { MACHINE_ADDR_BITS, BMP_WIDTH, BMP_HEIGHT, requiresMachineMap } from './machine/memoryMap.js';
 import { MachineRunner } from './machine/MachineRunner.js';
 import { loadSpectrumSession } from './machine/spectrumSession.js';
@@ -3450,6 +3450,14 @@ function reportError(err: unknown, source: ErrorSource): void {
   showErrorToast(report);
 }
 
+/** What the memory window must say when the RAM it shows is not the memory the machine runs on. */
+function memoryNotice(shown: RamComponent | RomComponent | null): string | null {
+  if (!shown || !machineRunner.isSpectrum || shown !== machineRunner.machineRam) return null;
+  return machineRunner.isSoft
+    ? "Not the Spectrum's memory: the emulator keeps its own, so this RAM stays empty in Soft mode."
+    : "A copy of the emulator's memory, refreshed every frame. The Z80's writes outside the screen are overwritten.";
+}
+
 let lastReportedMachineError: string | null = null;
 
 machineRunner.onSpectrumWorkerRecovery = (outcome) => showErrorToast(describeWorkerRecovery(outcome));
@@ -3487,6 +3495,7 @@ function runFrame(): void {
   if (memoryEditor.attached) {
     const tinyCpu = memoryEditor.memory?.kind === 'ram' ? tinyCpuForRam(topCircuit, library, memoryEditor.memory) : undefined;
     memoryEditor.setIsa(tinyCpu ? TINY_EDITOR_ISA : null);
+    memoryEditor.setNotice(memoryNotice(memoryEditor.memory));
     const soft = machineRunner.isSoft ? machineRunner.softCpu : null;
     const pc = tinyCpu ? readTinyPc(tinyCpu) : soft ? soft.pc & 0xffff : machineRunner.gatePc;
     if (memoryEditor.setLivePc(pc) && (tinyCpu || soft)) machineWorked = true;

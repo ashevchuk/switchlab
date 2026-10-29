@@ -103,6 +103,7 @@ export class MemoryEditor {
   private cursor = 0;
   /** Soft PC highlight (null = off). Independent of edit cursor unless Follow PC. */
   private livePc: number | null = null;
+  private notice: string | null = null;
   /** After typing the high nibble, wait for the low one before advancing. */
   private pendingHi: number | null = null;
   private renderPending = false;
@@ -264,7 +265,20 @@ export class MemoryEditor {
     this.pendingHi = null;
     this.render(true);
     this.refreshDisasm();
-    this.statusEl.textContent = `${this.mem.bytes.length} bytes · click a cell, type hex · asm/disasm below`;
+    this.renderStatus();
+  }
+
+  /** A warning shown instead of the usual hint, e.g. when this memory is not what the machine runs on. */
+  setNotice(text: string | null): void {
+    if (text === this.notice) return;
+    this.notice = text;
+    if (this.mem) this.renderStatus();
+  }
+
+  private renderStatus(): void {
+    this.statusEl.textContent =
+      this.notice ?? `${this.mem!.bytes.length} bytes · click a cell, type hex · asm/disasm below`;
+    this.statusEl.classList.toggle('is-warning', this.notice !== null);
   }
 
   private parseAddr(): number {

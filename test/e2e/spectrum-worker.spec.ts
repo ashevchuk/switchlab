@@ -143,6 +143,36 @@ test.describe('Spectrum Worker (http)', () => {
     await expect(page.locator('.machine-panel-status')).toContainText('run');
   });
 
+  test('labels say what the Spectrum is running on and what the RAM window shows', async ({ page }) => {
+    test.setTimeout(60_000);
+    await page.goto(`${base}/`);
+    await waitMenubar(page);
+    await placeSpectrum48(page);
+    await expect(page.locator('[data-spec-model]')).toHaveText('48K soft');
+
+    await page.evaluate(() => {
+      const { editor, camera } = (window as unknown as {
+        __simTest: {
+          editor: { circuit: { components: Map<string, { kind: string; pos: { x: number; y: number } }> } };
+          camera: { centerOn(p: { x: number; y: number }, z: number): void; worldToScreen(p: { x: number; y: number }, w: number, h: number): { x: number; y: number } };
+        };
+      }).__simTest;
+      const ram = [...editor.circuit.components.values()].filter((c) => c.kind === 'ram').at(-1)!;
+      camera.centerOn({ x: ram.pos.x - 300, y: ram.pos.y }, 1);
+      const canvas = document.getElementById('canvas')!;
+      const r = canvas.getBoundingClientRect();
+      const at = camera.worldToScreen(ram.pos, r.width, r.height);
+      canvas.dispatchEvent(new MouseEvent('dblclick', { clientX: r.left + at.x, clientY: r.top + at.y, bubbles: true }));
+    });
+    const memoryStatus = page.locator('.memory-editor .lab-panel-status');
+    await expect(memoryStatus).toContainText("Not the Spectrum's memory");
+
+    await page.selectOption('.machine-panel select[data-act="speed"]', 'turbo');
+    await expect(memoryStatus).toContainText('A copy of the emulator');
+    await expect(page.locator('[data-spec-model]')).toContainText('gates (experimental)');
+    await expect(page.locator('.machine-panel-status')).toContainText('experimental');
+  });
+
   test('tape rewind posts and Worker stays alive after TAP demo', async ({ page }) => {
     test.setTimeout(90_000);
     await page.goto(`${base}/`);
