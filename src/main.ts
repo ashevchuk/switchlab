@@ -52,7 +52,7 @@ import {
   syncSoftExpandForDivePath,
 } from './sim/softLab.js';
 import { decodeShareHash, encodeShareHash } from './sim/shareLink.js';
-import type { AnalyzerComponent, ChipInstanceComponent, Component, Level, RamComponent, SimState } from './sim/types.js';
+import type { AnalyzerComponent, ChipInstanceComponent, Component, Level, Pin, RamComponent, SimState } from './sim/types.js';
 import { MACHINE_ADDR_BITS, BMP_WIDTH, BMP_HEIGHT, requiresMachineMap } from './machine/memoryMap.js';
 import { MachineRunner } from './machine/MachineRunner.js';
 import { loadSpectrumSession } from './machine/spectrumSession.js';
@@ -1512,6 +1512,26 @@ async function promptZ80ProgramBytes(): Promise<Uint8Array | null> {
   return Uint8Array.from(bytes.map((b) => b & 0xff));
 }
 
+let foldedZ80Id: string | null = null;
+
+/** Once the machine is folded, the pins built for the runner live under the Z80CPU chip's namespace. */
+function foldedZ80Prefix(): string {
+  if (foldedZ80Id === null || !topCircuit.components.has(foldedZ80Id)) {
+    foldedZ80Id =
+      [...topCircuit.components.values()].find(
+        (c) => c.kind === 'chip' && library.has(c.defId) && library.get(c.defId).name === 'Z80CPU',
+      )?.id ?? null;
+  }
+  return foldedZ80Id === null ? '' : `${foldedZ80Id}/`;
+}
+
+function readFlatPin(pin: Pin): 0 | 1 | 'Z' {
+  if (!lastFlatNetMap) return 'Z';
+  const net = lastFlatNetMap.netOf.get(pin.id) ?? lastFlatNetMap.netOf.get(foldedZ80Prefix() + pin.id);
+  if (!net) return 'Z';
+  return simState.levelOf.get(net) ?? 'Z';
+}
+
 /** Place a Z80CPU + optional soft machine wiring; fold and fit view. */
 function placeZ80Machine(
   addrBits: number,
@@ -1535,12 +1555,7 @@ function placeZ80Machine(
     machinePanel.attach(cpu.ram);
     machinePanel.bindRunner(machineRunner);
     machineRunner.attach(editor.circuit, library, cpu, simTick, {
-      readPin: (pin) => {
-        if (!lastFlatNetMap) return 'Z';
-        const net = lastFlatNetMap.netOf.get(pin.id);
-        if (!net) return 'Z';
-        return simState.levelOf.get(net) ?? 'Z';
-      },
+      readPin: readFlatPin,
     });
     machineRunner.boot();
     machineRunner.setSpeed('soft');
@@ -1587,12 +1602,7 @@ function placeLedBlinkMachine(): void {
   machinePanel.attach(cpu.ram);
   machinePanel.bindRunner(machineRunner);
   machineRunner.attach(editor.circuit, library, cpu, simTick, {
-    readPin: (pin) => {
-      if (!lastFlatNetMap) return 'Z';
-      const net = lastFlatNetMap.netOf.get(pin.id);
-      if (!net) return 'Z';
-      return simState.levelOf.get(net) ?? 'Z';
-    },
+    readPin: readFlatPin,
   });
 
   // Gates: OUT 0x40 ∧ D0 decode (outside fold so taps become chip ports).
@@ -1707,12 +1717,7 @@ function placeLabRegMachine(): void {
   machinePanel.attach(cpu.ram);
   machinePanel.bindRunner(machineRunner);
   machineRunner.attach(editor.circuit, library, cpu, simTick, {
-    readPin: (pin) => {
-      if (!lastFlatNetMap) return 'Z';
-      const net = lastFlatNetMap.netOf.get(pin.id);
-      if (!net) return 'Z';
-      return simState.levelOf.get(net) ?? 'Z';
-    },
+    readPin: readFlatPin,
   });
 
   foldZ80CpuLeavingRam(editor.circuit, library, placedIds, pos);
@@ -3461,7 +3466,7 @@ function frame(): void {
     const tinyCpu = memoryEditor.memory?.kind === 'ram' ? tinyCpuForRam(topCircuit, library, memoryEditor.memory) : undefined;
     memoryEditor.setIsa(tinyCpu ? TINY_EDITOR_ISA : null);
     const soft = machineRunner.isSoft ? machineRunner.softCpu : null;
-    const pc = tinyCpu ? readTinyPc(tinyCpu) : soft ? soft.pc & 0xffff : null;
+    const pc = tinyCpu ? readTinyPc(tinyCpu) : soft ? soft.pc & 0xffff : machineRunner.gatePc;
     if (memoryEditor.setLivePc(pc) && (tinyCpu || soft)) machineWorked = true;
   }
 

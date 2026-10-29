@@ -82,6 +82,7 @@ export class MachineRunner {
   private reset!: InputComponent;
   private aReset!: InputComponent;
   private gatePhasesSinceBoot = 0;
+  private boundaryPc: number | null = null;
   /** Called after every tenth gate phase, when the CPU is between two instructions. */
   onInstructionBoundary: (() => void) | null = null;
   private dataClk!: InputComponent;
@@ -749,6 +750,23 @@ export class MachineRunner {
     return this.speed === 'soft';
   }
 
+  /** Program counter of the gate-level CPU as of the last instruction boundary; null in Soft mode. */
+  get gatePc(): number | null {
+    return this.isSoft ? null : this.boundaryPc;
+  }
+
+  /** Between two instructions every PC bit has settled; mid-instruction the bits flip one by one. */
+  private readGatePc(): number | null {
+    if (!this.cpu || !this.readPin) return null;
+    let pc = 0;
+    for (const [i, pin] of this.cpu.pc.entries()) {
+      const level = this.readPin(pin);
+      if (level !== 0 && level !== 1) return null;
+      pc |= level << i;
+    }
+    return pc;
+  }
+
   get phasesPerFrame(): number {
     if (this.speed === 'soft') {
       if (this.spectrum) {
@@ -899,6 +917,7 @@ export class MachineRunner {
     this.ram = ram;
     this.tick = null;
     this.readPin = null;
+    this.boundaryPc = null;
     this.booted = false;
     this.running = false;
     this.soft = null;
@@ -937,6 +956,7 @@ export class MachineRunner {
     this.ram = null;
     this.tick = null;
     this.readPin = null;
+    this.boundaryPc = null;
     this.library = null;
     this.lastGateIoWrite = 0;
     this.lastGateIoRead = 0;
@@ -1072,7 +1092,10 @@ export class MachineRunner {
     this.pulse(this.phaseClk);
     this.pulse(this.dataClk);
     this.syncGatePortDevices();
-    if (++this.gatePhasesSinceBoot % GATE_PHASES_PER_INSTRUCTION === 0) this.onInstructionBoundary?.();
+    if (++this.gatePhasesSinceBoot % GATE_PHASES_PER_INSTRUCTION === 0) {
+      this.boundaryPc = this.readGatePc();
+      this.onInstructionBoundary?.();
+    }
   }
 
   /**
