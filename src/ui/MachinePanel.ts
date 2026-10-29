@@ -166,7 +166,7 @@ export class MachinePanel {
         <button type="button" data-act="reboot" title="Reset PC via runner reboot">Reboot</button>
         <button type="button" data-act="io-map" title="Open soft machine I/O map">I/O map</button>
         <label class="machine-panel-speed">Speed
-          <select data-act="speed" title="Soft = interpreter (fast TTY). Gates = transistor (slow).">
+          <select data-act="speed" title="Soft = interpreter (fast TTY). Gates = transistor level, about 7 instructions per second.">
             <option value="soft" selected>Soft (fast)</option>
             <option value="slow">Gates slow</option>
             <option value="normal">Gates normal</option>
