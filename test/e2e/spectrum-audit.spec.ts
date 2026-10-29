@@ -95,6 +95,22 @@ test.describe('Spectrum audit — demo after demo', () => {
     await expect.poll(() => tapePosition(page), { timeout: 90_000 }).toBeGreaterThan(0);
   });
 
+  for (const [button, name] of [
+    ['basic-demo', 'Boot BASIC'],
+    ['cpm-soft', 'Boot soft CP/M stub'],
+  ] as const) {
+    test(`${name} after a Spectrum demo switches the panel back to the console`, async ({ page }) => {
+      test.setTimeout(90_000);
+      await placeSpectrum48(page);
+      await loadBundledDemo(page, 'rainbow');
+      await expect.poll(() => spectrumScreenActive(page), { timeout: 20_000 }).toBe(true);
+      await expect(page.locator('[data-tab="spectrum"]')).toHaveAttribute('aria-selected', 'true');
+      await page.evaluate((act) => (document.querySelector(`.machine-panel [data-act="${act}"]`) as HTMLElement | null)?.click(), button);
+      await expect(page.locator('[data-tab="console"]')).toHaveAttribute('aria-selected', 'true');
+      await expect(page.locator('canvas[data-canvas="spec"]')).toBeHidden();
+    });
+  }
+
   test('a TAP demo loads on top of another TAP demo', async ({ page }) => {
     test.setTimeout(200_000);
     await placeSpectrum48(page);

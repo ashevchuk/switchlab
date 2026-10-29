@@ -879,6 +879,7 @@ JR spin</textarea>
       this.asmSource.value = BASIC_DEMO_SOURCE.trim() + '\n';
       this.loadAddr.value = BASIC_ORIGIN.toString(16).padStart(4, '0');
       this.runner?.setSpectrumMode(false);
+      this.setTab('console');
       const { bytes, origin } = loadBasicRom(this.ram.bytes);
       this.loadHex.value = bytesToHexPrompt(
         this.ram.bytes.subarray(origin, origin + bytes),
@@ -905,6 +906,7 @@ JR spin</textarea>
     try {
       const disk = this.runner!.softDevices.disk;
       this.runner!.setSpectrumMode(false);
+      this.setTab('console');
       if (real) {
         bootRealCpm(this.ram.bytes, disk, loadCpm22DiskImage());
         this.runner!.softDevices.cpm = null;
