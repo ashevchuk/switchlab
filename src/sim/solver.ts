@@ -310,7 +310,7 @@ export interface Relaxed {
 
 export type SolverEngine = 'jacobi' | 'event' | 'shadow' | 'ordered' | 'shadow-ordered';
 
-let engine: SolverEngine = 'event';
+let engine: SolverEngine = 'ordered';
 if (typeof process !== 'undefined') {
   const requested = process.env.SOLVER_ENGINE;
   if (
