@@ -1,4 +1,4 @@
-import { bodyEdgeToward, chipBoxSize, chipPinEdge, getOrientation, transformOffset, type BodyEdge } from '../sim/orientation.js';
+import { bodyEdgeToward, chipBoxSize, chipPinEdge, memoryBoxSize, memoryPinEdge, getOrientation, transformOffset, type BodyEdge } from '../sim/orientation.js';
 import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import type { Circuit } from '../sim/Circuit.js';
 import { decodeBusProbe } from '../sim/busProbe.js';
@@ -107,9 +107,9 @@ export function componentRadius(c: Component): { rx: number; ry: number } {
     case 'chip':
       return { rx: chipBoxSize(c).w / 2 + 20, ry: chipBoxSize(c).h / 2 + 20 };
     case 'ram':
-      return { rx: CHIP_INSTANCE_WIDTH / 2 + 20, ry: chipInstanceHeight(ramPortCount(c)) / 2 + 20 };
+      return { rx: memoryBoxSize(c).w / 2 + 20, ry: memoryBoxSize(c).h / 2 + 20 };
     case 'rom':
-      return { rx: CHIP_INSTANCE_WIDTH / 2 + 20, ry: chipInstanceHeight(romPortCount(c)) / 2 + 20 };
+      return { rx: memoryBoxSize(c).w / 2 + 20, ry: memoryBoxSize(c).h / 2 + 20 };
   }
 }
 
@@ -1867,8 +1867,7 @@ function drawComponent(
     }
     case 'ram': {
       const { x, y } = c.pos;
-      const w = CHIP_INSTANCE_WIDTH;
-      const h = chipInstanceHeight(ramPortCount(c));
+      const { w, h } = memoryBoxSize(c);
       if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 8, ringColor);
       const grad = ctx.createLinearGradient(x - w / 2, y - h / 2, x + w / 2, y + h / 2);
       grad.addColorStop(0, COLOR.ramBody);
@@ -1882,15 +1881,14 @@ function drawComponent(
       for (const p of Object.values(c.pins) as Pin[]) {
         stubPin(x, y, w / 2, h / 2, p);
         dot(p);
-        drawBodyPinLabel(ctx, p, x, y, undefined, w, h);
+        drawBodyPinLabel(ctx, p, x, y, undefined, w, h, memoryPinEdge(c));
       }
       drawChipMarking(ctx, x, y, w, h, `RAM ${1 << c.addrBits}×${c.dataBits}`);
       break;
     }
     case 'rom': {
       const { x, y } = c.pos;
-      const w = CHIP_INSTANCE_WIDTH;
-      const h = chipInstanceHeight(romPortCount(c));
+      const { w, h } = memoryBoxSize(c);
       if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 8, ringColor);
       const grad = ctx.createLinearGradient(x - w / 2, y - h / 2, x + w / 2, y + h / 2);
       grad.addColorStop(0, '#2a2438');
@@ -1904,7 +1902,7 @@ function drawComponent(
       for (const p of Object.values(c.pins) as Pin[]) {
         stubPin(x, y, w / 2, h / 2, p);
         dot(p);
-        drawBodyPinLabel(ctx, p, x, y, undefined, w, h);
+        drawBodyPinLabel(ctx, p, x, y, undefined, w, h, memoryPinEdge(c));
       }
       drawChipMarking(ctx, x, y, w, h, `ROM ${1 << c.addrBits}×${c.dataBits}`);
       break;

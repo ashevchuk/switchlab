@@ -15,10 +15,14 @@ import {
   CHIP_PIN_DX,
   CHIP_PIN_DX_RIGHT,
   chipBodyWidth,
+  CHIP_INSTANCE_WIDTH,
   chipBoxHeight,
+  chipInstanceHeight,
   chipPinDxPair,
   chipPinDys,
   LAYOUT,
+  ramPortCount,
+  romPortCount,
   pinSidesFromDef,
   transistorPinOffsets,
 } from './library.js';
@@ -367,17 +371,12 @@ export function orientSelection(
 
 export type BodyEdge = 'left' | 'right' | 'top' | 'bottom';
 
-/** Body box of a chip as drawn: width and height swap when it is turned a quarter. */
-export function chipBoxSize(c: ChipInstanceComponent): { w: number; h: number } {
-  const w = chipBodyWidth(c);
-  const h = chipBoxHeight(c);
-  return c.rotation === 90 || c.rotation === 270 ? { w: h, h: w } : { w, h };
+function turnedQuarter(c: { rotation?: Rotation }): boolean {
+  return c.rotation === 90 || c.rotation === 270;
 }
 
-/** The body edge a chip pin sits on after flip and rotation. */
-export function chipPinEdge(c: ChipInstanceComponent, pinName: string): BodyEdge {
-  let left = c.pinSide?.[pinName] !== 1;
-  if (c.mirrorX) left = !left;
+function edgeAfterOrientation(onLeft: boolean, c: { rotation?: Rotation; mirrorX?: boolean }): BodyEdge {
+  const left = c.mirrorX ? !onLeft : onLeft;
   switch (c.rotation) {
     case 90:
       return left ? 'top' : 'bottom';
@@ -388,4 +387,30 @@ export function chipPinEdge(c: ChipInstanceComponent, pinName: string): BodyEdge
     default:
       return left ? 'left' : 'right';
   }
+}
+
+/** Body box of a chip as drawn: width and height swap when it is turned a quarter. */
+export function chipBoxSize(c: ChipInstanceComponent): { w: number; h: number } {
+  const w = chipBodyWidth(c);
+  const h = chipBoxHeight(c);
+  return turnedQuarter(c) ? { w: h, h: w } : { w, h };
+}
+
+/** The body edge a chip pin sits on after flip and rotation. */
+export function chipPinEdge(c: ChipInstanceComponent, pinName: string): BodyEdge {
+  return edgeAfterOrientation(c.pinSide?.[pinName] !== 1, c);
+}
+
+type MemoryComponent = Extract<Component, { kind: 'ram' | 'rom' }>;
+
+/** Body box of a RAM or ROM as drawn: width and height swap when it is turned a quarter. */
+export function memoryBoxSize(c: MemoryComponent): { w: number; h: number } {
+  const w = CHIP_INSTANCE_WIDTH;
+  const h = chipInstanceHeight(c.kind === 'ram' ? ramPortCount(c) : romPortCount(c));
+  return turnedQuarter(c) ? { w: h, h: w } : { w, h };
+}
+
+/** Every RAM / ROM pin starts on the left edge; flip and rotation move them together. */
+export function memoryPinEdge(c: MemoryComponent): BodyEdge {
+  return edgeAfterOrientation(true, c);
 }

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { ChipLibrary } from '../src/sim/ChipLibrary.js';
 import { Circuit } from '../src/sim/Circuit.js';
-import { makeButton, makeChipInstance, makeLed, makeRam, makeSource } from '../src/sim/library.js';
+import { makeButton, makeChipInstance, makeLed, makeRam, makeRom, makeSource } from '../src/sim/library.js';
 import {
   applyPinLayout,
   chipBoxSize,
   chipPinEdge,
+  memoryBoxSize,
+  memoryPinEdge,
   getOrientation,
   rotateCw,
   setOrientation,
@@ -241,5 +243,30 @@ describe('chip body follows rotation and flip', () => {
     const upright = chipBoxSize(chip);
     setOrientation(chip, 90, false, false);
     expect(chipBoxSize(chip)).toEqual({ w: upright.h, h: upright.w });
+  });
+});
+
+describe('RAM and ROM body follows rotation and flip', () => {
+  it('every pin sits inside the oriented body, on the edge memoryPinEdge names', () => {
+    for (const make of [() => makeRam(new Circuit(), 4, 8, undefined, { x: 0, y: 0 }), () => makeRom(new Circuit(), 4, 8, undefined, { x: 0, y: 0 })]) {
+      for (const rotation of [0, 90, 180, 270] as const) {
+        for (const mirrorX of [false, true]) {
+          const mem = make();
+          setOrientation(mem, rotation, mirrorX, false);
+          const { w, h } = memoryBoxSize(mem);
+          const where = `${mem.kind}, rotation ${rotation}, mirrorX ${mirrorX}`;
+          const edge = memoryPinEdge(mem);
+          for (const pin of Object.values(mem.pins)) {
+            const { x, y } = pin.pos;
+            expect(Math.abs(x), where).toBeLessThanOrEqual(w / 2);
+            expect(Math.abs(y), where).toBeLessThanOrEqual(h / 2);
+            if (edge === 'left') expect(x, where).toBeLessThan(0);
+            else if (edge === 'right') expect(x, where).toBeGreaterThan(0);
+            else if (edge === 'top') expect(y, where).toBeLessThan(0);
+            else expect(y, where).toBeGreaterThan(0);
+          }
+        }
+      }
+    }
   });
 });

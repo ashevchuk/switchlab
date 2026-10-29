@@ -78,7 +78,7 @@ import { WatchList, consecutiveBusPins, type WatchBusGroup } from './ui/WatchLis
 import { IoMapViewer } from './ui/IoMapViewer.js';
 import { draw } from './ui/Renderer.js';
 import { makeSoftCanvasResolve } from './ui/softCanvasResolve.js';
-import { chipBoxSize, isOrientable, orientSelection } from './sim/orientation.js';
+import { chipBoxSize, isOrientable, memoryBoxSize, orientSelection } from './sim/orientation.js';
 import {
   showContextMenu,
   hideContextMenu,
@@ -2482,9 +2482,7 @@ function exportSchematicSvg(): void {
       }
       case 'ram':
       case 'rom': {
-        const n = c.kind === 'ram' ? ramPortCount(c) : romPortCount(c);
-        const bw = CHIP_INSTANCE_WIDTH;
-        const bh = chipInstanceHeight(n);
+        const { w: bw, h: bh } = memoryBoxSize(c);
         parts.push(
           `<rect x="${x - bw / 2}" y="${y - bh / 2}" width="${bw}" height="${bh}" rx="8" fill="#2a3a2c" stroke="#7d8496" stroke-width="1.5"/>`,
         );

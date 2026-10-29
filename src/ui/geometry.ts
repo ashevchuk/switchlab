@@ -1,5 +1,5 @@
 import { CHIP_INSTANCE_WIDTH, chipBodyWidth, chipBoxHeight, chipInstanceHeight, BUS_PASS_BODY_W, BUS_SWITCH_BODY_W, ramPortCount, romPortCount } from '../sim/library.js';
-import { chipBoxSize } from '../sim/orientation.js';
+import { chipBoxSize, memoryBoxSize } from '../sim/orientation.js';
 import type { Circuit } from '../sim/Circuit.js';
 import type { BusPassComponent, BusSwitchComponent, Component, Pin, Point, Wire } from '../sim/types.js';
 import { routeEscapeChannel } from './routeChannel.js';
@@ -924,12 +924,12 @@ export function routingObstacles(circuit: Circuit, excludeIds?: ReadonlySet<stri
         hh = chipBoxSize(c).h / 2;
         break;
       case 'ram':
-        hw = CHIP_INSTANCE_WIDTH / 2;
-        hh = chipInstanceHeight(ramPortCount(c)) / 2;
+        hw = memoryBoxSize(c).w / 2;
+        hh = memoryBoxSize(c).h / 2;
         break;
       case 'rom':
-        hw = CHIP_INSTANCE_WIDTH / 2;
-        hh = chipInstanceHeight(romPortCount(c)) / 2;
+        hw = memoryBoxSize(c).w / 2;
+        hh = memoryBoxSize(c).h / 2;
         break;
       case 'button':
         hw = 17;
@@ -1090,9 +1090,9 @@ function boundsHalfSize(c: Component): [number, number] {
       case 'chip':
         return [chipBoxSize(c).w / 2, chipBoxSize(c).h / 2];
       case 'ram':
-        return [CHIP_INSTANCE_WIDTH / 2, chipInstanceHeight(ramPortCount(c)) / 2];
+        return [memoryBoxSize(c).w / 2, memoryBoxSize(c).h / 2];
       case 'rom':
-        return [CHIP_INSTANCE_WIDTH / 2, chipInstanceHeight(romPortCount(c)) / 2];
+        return [memoryBoxSize(c).w / 2, memoryBoxSize(c).h / 2];
       case 'source':
         return [16, 8];
       case 'transistor':
