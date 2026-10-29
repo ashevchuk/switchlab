@@ -54,7 +54,7 @@ A transistor-level schematic editor with live simulation, foldable chips, Soft L
 - A short is local: a group of nets tied to both VCC and GND, or driven both ways, reads `Z` and counts as contended while the rest of the circuit keeps running.
 - A latch or floating node that nothing has written stays `Z` instead of a random 0 or 1; reset or seed it before reading it.
 - An unexpected error, or a machine that stops on one, shows a toast in the bottom-right corner with a suggested fix. It stays until dismissed; repeats only raise its counter. The editor keeps running, and Reboot restarts a stopped machine.
-- A Z80 built from gates (Speed **Gates …**) runs at roughly 7 instructions per second, so a monitor command can take tens of seconds. **Soft** runs the same program with the interpreter at full speed.
+- A Z80 built from gates (Speed **Gates …**) runs at roughly 7 instructions per second, so a monitor command can take tens of seconds. **Soft** runs the same program with the interpreter at full speed. Place → Z80 CPU defaults to 16 address bits (64K); typing 12 there gives the 4K machine, which is about 20% faster on gates.
 - Logic Analyzer: Arm/Pause, dual cursors, clock-lock Hz estimate when a channel shares a net with a free-running clock; export CSV / **VCD** / **PNG**. Watch-list bus rows: right-click → spawn bus probe or wire into an Analyzer.
 
 ## Soft Z80 machine (TTY)

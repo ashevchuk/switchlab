@@ -2,13 +2,15 @@
  * Z80-native command monitor ROM — real opcodes at RAM 0x000.
  * Typed on the TTY canvas (not the host Cmd box): H / M / W / G.
  *
- * Memory: code @ 0000, line buffer @ 0xD00 (32 B), stack @ 0xDFF,
- * FB @ 0xE00, KEY_* @ 0xF00. Keep user programs at ≥ 0x200.
+ * Memory: code @ 0000, line buffer @ 0xD00 (32 B), stack @ 0xDFF. The framebuffer
+ * and keyboard registers follow the machine's I/O layout: 12-bit RAM has FB @ 0xE00 and
+ * KEY_* @ 0xF00, 64K RAM has FB @ 0xF000 and KEY_* @ 0xF100. Keep user programs at ≥ 0x200.
  *
  * Assembled once at module load via the mini assembler.
  */
 
 import { assemble } from './assembler.js';
+import { MACHINE_ADDR_BITS, softIoLayoutForAddrBits, softIoLayoutForRam, type SoftIoLayout } from './memoryMap.js';
 
 /** LINEBUF base — keep in sync with COMMAND_ROM_SOURCE. */
 export const CMD_LINEBUF = 0xd00;
@@ -23,11 +25,11 @@ export const CMD_STACK = 0xdff;
  *   W aaaa bb.. — poke bytes
  *   G aaaa — JP aaaa
  */
-export const COMMAND_ROM_SOURCE = `
+const COMMAND_ROM_BODY = `
 ; Z80 command monitor — origin 0
 cold:
   LD SP,0xDFF
-  LD HL,0xE00
+  LD HL,FB_BASE
   CALL put_prompt
 main:
   CALL read_line
@@ -48,13 +50,13 @@ read_line:
   XOR A
   LD (DE),A
 rl_poll:
-  LD A,(0xF00)
+  LD A,(KEY_STATUS)
   CP 1
   JR NZ,rl_poll
-  LD A,(0xF01)
+  LD A,(KEY_DATA)
   LD B,A
   XOR A
-  LD (0xF00),A
+  LD (KEY_STATUS),A
   LD A,B
   CP 0x0D
   JR Z,rl_cr
@@ -306,14 +308,14 @@ hex_val_af:
   RET
 
 ; ---- FB output ----
-; A char → (HL)+, wrap at F00
+; A char → (HL)+, wrap at the end of the framebuffer
 putch:
   LD (HL),A
   INC HL
   LD A,H
-  CP 0x0F
+  CP FB_END_HI
   RET C
-  LD HL,0xE00
+  LD HL,FB_BASE
   RET
 
 newline:
@@ -325,9 +327,9 @@ newline:
   INC H
 nl_ok:
   LD A,H
-  CP 0x0F
+  CP FB_END_HI
   RET C
-  LD HL,0xE00
+  LD HL,FB_BASE
   RET
 
 backspace_fb:
@@ -335,7 +337,7 @@ backspace_fb:
   CP 0
   JR NZ,bs_do
   LD A,H
-  CP 0x0E
+  CP FB_BASE_HI
   RET Z
 bs_do:
   DEC HL
@@ -372,8 +374,23 @@ help_msg:
   DB "H M addr [n]  W addr bb..  G addr",0
 `;
 
-function buildCommandRom(): Uint8Array {
-  const r = assemble(COMMAND_ROM_SOURCE, 0);
+function commandRomSource(layout: SoftIoLayout): string {
+  const hex = (n: number): string => `0x${n.toString(16).toUpperCase()}`;
+  return [
+    `EQU FB_BASE,${hex(layout.fbBase)}`,
+    `EQU FB_BASE_HI,${hex(layout.fbBase >> 8)}`,
+    `EQU FB_END_HI,${hex(layout.fbEnd >> 8)}`,
+    `EQU KEY_STATUS,${hex(layout.keyStatus)}`,
+    `EQU KEY_DATA,${hex(layout.keyData)}`,
+    COMMAND_ROM_BODY,
+  ].join('\n');
+}
+
+/** The 12-bit machine's source; kept as the reference listing. */
+export const COMMAND_ROM_SOURCE = commandRomSource(softIoLayoutForAddrBits(MACHINE_ADDR_BITS));
+
+function buildCommandRom(layout: SoftIoLayout): Uint8Array {
+  const r = assemble(commandRomSource(layout), 0);
   if (!r.ok) {
     throw new Error(`command ROM assemble failed:\n${r.errors.join('\n')}`);
   }
@@ -384,15 +401,29 @@ function buildCommandRom(): Uint8Array {
   return r.bytes;
 }
 
-export const COMMAND_ROM_BYTES = buildCommandRom();
+export const COMMAND_ROM_BYTES = buildCommandRom(softIoLayoutForAddrBits(MACHINE_ADDR_BITS));
 
-export function commandRomHexPrompt(): string {
-  return [...COMMAND_ROM_BYTES].map((b) => b.toString(16).padStart(2, '0')).join(',');
+const imageByAddrBits = new Map<number, Uint8Array>();
+
+/** The command ROM for a machine with this many address bits (12 = 4K map, 16 = 64K map). */
+export function commandRomFor(addrBits: number): Uint8Array {
+  const layout = softIoLayoutForAddrBits(addrBits);
+  let image = imageByAddrBits.get(layout.addrBits);
+  if (!image) {
+    image = layout.addrBits === MACHINE_ADDR_BITS ? COMMAND_ROM_BYTES : buildCommandRom(layout);
+    imageByAddrBits.set(layout.addrBits, image);
+  }
+  return image;
+}
+
+export function commandRomHexPrompt(addrBits: number = MACHINE_ADDR_BITS): string {
+  return [...commandRomFor(addrBits)].map((b) => b.toString(16).padStart(2, '0')).join(',');
 }
 
 export function loadCommandRom(bytes: Uint8Array): void {
-  if (bytes.length < COMMAND_ROM_BYTES.length) {
-    throw new RangeError(`RAM too small for command ROM (${bytes.length} < ${COMMAND_ROM_BYTES.length})`);
+  const image = commandRomFor(softIoLayoutForRam(bytes).addrBits);
+  if (bytes.length < image.length) {
+    throw new RangeError(`RAM too small for command ROM (${bytes.length} < ${image.length})`);
   }
-  bytes.set(COMMAND_ROM_BYTES, 0);
+  bytes.set(image, 0);
 }

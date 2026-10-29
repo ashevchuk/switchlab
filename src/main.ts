@@ -53,7 +53,7 @@ import {
 } from './sim/softLab.js';
 import { decodeShareHash, encodeShareHash } from './sim/shareLink.js';
 import type { AnalyzerComponent, ChipInstanceComponent, Component, Level, Pin, RamComponent, RomComponent, SimState } from './sim/types.js';
-import { MACHINE_ADDR_BITS, BMP_WIDTH, BMP_HEIGHT, requiresMachineMap } from './machine/memoryMap.js';
+import { CPM_ADDR_BITS, MACHINE_ADDR_BITS, BMP_WIDTH, BMP_HEIGHT, requiresMachineMap } from './machine/memoryMap.js';
 import { MachineRunner } from './machine/MachineRunner.js';
 import { loadSpectrumSession } from './machine/spectrumSession.js';
 import { placeLabLedGateDecode } from './machine/labLedGateDecode.js';
@@ -1497,13 +1497,14 @@ document.getElementById('add-cpu')?.addEventListener('click', async () => {
  * Default demo: Z80 command ROM (TTY H/M/W/G on FB @ 0xE00). Needs addrBits ≥ 12.
  * For soft CP/M use addrBits=16 then TTY → Boot CP/M.
  */
-const Z80_MONITOR_HEX = commandRomHexPrompt();
+/** Place → Z80 CPU starts with the full 64K address space; 12 bits remains one keystroke away. */
+const Z80_DEFAULT_ADDR_BITS = CPM_ADDR_BITS;
 
 /** Same shape as promptProgramBytes(), defaulted to the command ROM. */
-async function promptZ80ProgramBytes(): Promise<Uint8Array | null> {
+async function promptZ80ProgramBytes(addrBits: number): Promise<Uint8Array | null> {
   const raw = await showPrompt(
-    'Program bytes, comma-separated hex — default is the Z80 command ROM (TTY H/M/W/G; FB @ 0xE00; needs 12-bit RAM). Or Insert → LED blink… for OUT 0x40 → canvas LED. Use 16-bit RAM + Boot CP/M for soft CP/M:',
-    Z80_MONITOR_HEX,
+    'Program bytes, comma-separated hex — default is the Z80 command ROM (TTY H/M/W/G; its screen and keyboard registers follow the RAM size). Or Insert → LED blink… for OUT 0x40 → canvas LED. Use 16-bit RAM + Boot CP/M for soft CP/M:',
+    commandRomHexPrompt(addrBits),
   );
   if (!raw) return null;
   const bytes = raw
@@ -1579,9 +1580,9 @@ function placeZ80Machine(
 }
 
 document.getElementById('add-z80cpu')?.addEventListener('click', async () => {
-  const addrBits = await promptWidth('Z80 CPU RAM address bits', String(MACHINE_ADDR_BITS));
+  const addrBits = await promptWidth('Z80 CPU RAM address bits', String(Z80_DEFAULT_ADDR_BITS));
   if (addrBits === null) return;
-  const program = await promptZ80ProgramBytes();
+  const program = await promptZ80ProgramBytes(addrBits);
   if (program === null) return;
   placeZ80Machine(addrBits, program);
 });
