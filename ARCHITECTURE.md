@@ -330,26 +330,62 @@ the solver itself is solving for). Reusing the same `UnionFind` class for
 both is fine; reusing the same *instance* would not be — they operate at
 different granularity and different lifetimes.
 
-## The solver, in one paragraph
+## The solver
 
-Every net starts at its previous tick's level (or `'Z'` on power-up).  Each
-iteration: union every pair of nets joined by a currently-conducting
-transistor (NMOS conducts when its gate net is `1`; PMOS when its gate net
-is `0`); for each resulting group, look at every `source`/`input` component
-whose pin lands in that group — one distinct forced level drives the whole
-group, two conflicting ones is a short (`contended`, resolved to `'Z'`
-rather than modeled as an analog voltage), zero means the group is
-floating and keeps whatever it was already at (capacitive hold — this is
-how an SR latch remembers its state with no dedicated memory primitive).
-Repeat until nothing changes (a fixpoint) or `maxIterations` is hit. See
-the doc-comment on `step()` in `src/sim/solver.ts` for the full version.
+Every net has a level (`0`, `1` or `Z`). A group of nets joined by currently
+conducting transistors (NMOS conducts when its gate net is `1`, PMOS when it is
+`0`, a gate at `Z` conducts neither) takes its value from the forced drivers
+inside it: one distinct level wins, two conflicting ones is a short (`contended`,
+resolved to `Z` rather than modelled as a voltage), none means the group is
+floating and keeps what its members remembered (capacitive hold, which is how an
+SR latch remembers its state with no memory primitive). `step()` carries levels
+from tick to tick and then, once, applies RAM writes, key-status clears and Soft
+Lab edge commits. The long comment on `step()` in `src/sim/solver.ts` has the
+details of the rules.
 
-`Fast`/`Turbo` engine tiers (present in the reference project) do not exist
-yet — for now there is only the fully-relaxed "Real" engine. When added,
-they should be a *speed* knob (more relaxation steps per animation frame,
-or a cached topological short-circuit for pure combinational fan-out), not
-a second, less-correct algorithm — see the note in the original project
-analysis for why that distinction matters.
+### Engines
+
+Four implementations compute a tick; `SOLVER_ENGINE` (or `setSolverEngine`)
+picks one, `ordered` is the default.
+
+| Engine | Evaluation | Use |
+|---|---|---|
+| `ordered` | Priority queue over the static channel-connected groups, ranked by a depth-first reverse postorder of the gate dependency graph; groups commit in place | Default |
+| `event` | Same synchronous passes as `jacobi`, but only groups whose inputs changed are recomputed | Reference that is bit-identical to `jacobi` |
+| `jacobi` | Every net recomputed on every pass, all passes synchronous, at most 64 passes per tick | Original reference, also used for Soft to Gates POR ticks |
+| `shadow`, `shadow-ordered` | Run `event` or `ordered` next to `jacobi` and throw with the differing nets on any divergence | Verification |
+
+`ordered` evaluates a group once per tick on the acyclic part of a circuit and
+re-evaluates groups only along real feedback, with a limit of 64 evaluations per
+group per tick (`iterations` reports the largest count, `settled` is false when
+a group hit the limit and its pending work is carried to the next tick). The
+synchronous engines glitch their way through deep logic and, for the gate-level
+Z80, often need more than 64 passes; the tick was cut off half-settled and the
+half-settled state carried on, which made the Z80 run a different program than
+the soft interpreter.
+
+### Where `ordered` differs from the synchronous engines
+
+- **A short is local.** In `jacobi` and `event` VCC and GND are ordinary nets, so
+  any conducting path between them put every net tied to either rail at `Z`. In
+  `ordered` the groups tied to a rail are never merged, and a group tied to both
+  levels, or driven both ways, reads `Z` and is flagged `contended` on its own
+  while the rest of the circuit keeps running. A momentary shoot-through in one
+  gate no longer blanks the chip.
+- **Storage nobody wrote stays undefined.** A latch or floating node whose
+  power-up state depends on how the transients happened to interleave keeps `Z`
+  in `ordered` instead of an arbitrary 0 or 1. Circuits and tests that read such
+  a node must reset or seed it.
+- **Bistable circuits** with more than one stable state may settle into a
+  different one than `jacobi` does. Symmetric ones (for example a toggling
+  flip-flop built from gates) settle instead of toggling on every pass.
+
+`shadow-ordered` checks a settled tick against `jacobi` with a cap high enough to
+settle, and accepts a difference only when a floating node upstream of it
+explains it.
+
+`Fast`/`Turbo` machine speeds are a separate matter: they set how many phases
+the runner spends per animation frame and do not change what the solver computes.
 
 ## Hierarchy: fold() and flatten()
 
@@ -661,6 +697,9 @@ over it. `solver.test.ts`'s test for this checks that `contended` fires on
 *some* pass and `settled` never does, rather than asserting one fixed
 snapshot — a single-pass check would pass or fail depending on pure
 iteration-count parity, which is not something worth asserting about.
+
+The finding above describes the synchronous engines. With `ordered` a short only
+blanks the group that has it (see "The solver").
 
 `TRI_BUF` is seeded as a placeable stdcell (`stdcells.ts`) exactly like
 every other gate, and is also folded independently (and cached per
