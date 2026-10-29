@@ -45,8 +45,6 @@ import { waitForSpectrumBasicInputReady, waitForSpectrumScreenReady } from '../m
 const CELL_W = 9;
 const CELL_H = 15;
 const PAD = 6;
-const BMP_SCALE = 2;
-const BMP_GAP = 6;
 const MAX_PENDING_KEYS = 16;
 /**
  * After a key is read, the next waits this many gate instructions: the monitor clears the
@@ -723,9 +721,7 @@ JR spin</textarea>
     const { cols, rows } = this.textGeometry();
     const textW = cols * CELL_W + PAD * 2;
     const textH = rows * CELL_H + PAD * 2;
-    const cssW = Math.max(textW, BMP_WIDTH * BMP_SCALE + PAD * 2);
-    const cssH = textH + BMP_GAP + BMP_HEIGHT * BMP_SCALE + PAD;
-    return { cssW, cssH };
+    return { cssW: textW, cssH: textH };
   }
 
   private spectrumCssSize(): { cssW: number; cssH: number } {
@@ -1803,22 +1799,12 @@ JR spin</textarea>
     const fbSrc = host && devices ? devices.consoleFb : bytes;
     const fbOff = host ? 0 : L.fbBase;
     for (let i = 0; i < size; i++) {
-      const col = i % cols;
-      const row = (i / cols) | 0;
-      const code = fbSrc[fbOff + i] ?? 0;
-      const ch = code >= 0x20 && code < 0x7f ? String.fromCharCode(code) : code === 0 ? ' ' : '·';
-      const x = PAD + col * CELL_W;
-      const y = PAD + row * CELL_H;
       ctx.fillStyle = '#1a1f2a';
-      ctx.fillRect(x, y, CELL_W - 1, CELL_H - 1);
-      ctx.fillStyle = '#c8d0e0';
-      ctx.fillText(ch, x + 1, y + 2);
+      ctx.fillRect(PAD + (i % cols) * CELL_W, PAD + ((i / cols) | 0) * CELL_H, CELL_W - 1, CELL_H - 1);
     }
 
-    const bmpY = PAD + rows * CELL_H + BMP_GAP;
+    // The bitmap is a layer under the text, stretched over the whole character grid.
     const bmp = this.runner?.softDevices.bitmap;
-    ctx.fillStyle = '#12151c';
-    ctx.fillRect(PAD, bmpY, BMP_WIDTH * BMP_SCALE, BMP_HEIGHT * BMP_SCALE);
     if (bmp) {
       if (!this.bmpImage || this.bmpImage.width !== BMP_WIDTH || this.bmpImage.height !== BMP_HEIGHT) {
         this.bmpImage = this.bmpTmpCtx.createImageData(BMP_WIDTH, BMP_HEIGHT);
@@ -1827,19 +1813,21 @@ JR spin</textarea>
       for (let i = 0; i < BMP_WIDTH * BMP_HEIGHT; i++) {
         const bit = (bmp[(i / 8) | 0]! >> (7 - (i & 7))) & 1;
         const o = i * 4;
-        const v = bit ? 200 : 18;
-        img.data[o] = v;
-        img.data[o + 1] = bit ? 210 : 20;
-        img.data[o + 2] = bit ? 230 : 28;
-        img.data[o + 3] = 255;
-      }
-      if (this.bmpTmp.width !== BMP_WIDTH || this.bmpTmp.height !== BMP_HEIGHT) {
-        this.bmpTmp.width = BMP_WIDTH;
-        this.bmpTmp.height = BMP_HEIGHT;
+        img.data[o] = 52;
+        img.data[o + 1] = 92;
+        img.data[o + 2] = 140;
+        img.data[o + 3] = bit ? 255 : 0;
       }
       this.bmpTmpCtx.putImageData(img, 0, 0);
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(this.bmpTmp, PAD, bmpY, BMP_WIDTH * BMP_SCALE, BMP_HEIGHT * BMP_SCALE);
+      ctx.drawImage(this.bmpTmp, PAD, PAD, cols * CELL_W, rows * CELL_H);
+    }
+
+    ctx.fillStyle = '#c8d0e0';
+    for (let i = 0; i < size; i++) {
+      const code = fbSrc[fbOff + i] ?? 0;
+      const ch = code >= 0x20 && code < 0x7f ? String.fromCharCode(code) : code === 0 ? ' ' : '·';
+      ctx.fillText(ch, PAD + (i % cols) * CELL_W + 1, PAD + ((i / cols) | 0) * CELL_H + 2);
     }
 
     const status = bytes[L.keyStatus] ?? 0;
