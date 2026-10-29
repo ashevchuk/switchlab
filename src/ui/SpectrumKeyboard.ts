@@ -74,9 +74,6 @@ const GAP_MS = 80;
 /** Longer holds for auto LOAD "" — short pulses are missed when rAF is busy/throttled. */
 const AUTO_HOLD_MS = 280;
 const AUTO_GAP_MS = 160;
-/** Prefer waiting this many animation frames when a waitFrames hook is provided. */
-const AUTO_HOLD_FRAMES = 8;
-const AUTO_GAP_FRAMES = 4;
 
 export class SpectrumKeyboard {
   readonly root: HTMLElement;
@@ -87,8 +84,6 @@ export class SpectrumKeyboard {
   /** Optional dual-path key inject (Worker host). Falls back to getUla().setKey. */
   private setKeyFn: ((label: string, down: boolean) => void) | null = null;
   private onLoadEmpty: (() => void) | null = null;
-  /** Wait N display frames (preferred over wall-clock for auto typing). */
-  private waitFramesFn: ((n: number) => Promise<void>) | null = null;
   /** Called after matrix changes so the panel can redraw. */
   onActivity: (() => void) | null = null;
 
@@ -96,12 +91,10 @@ export class SpectrumKeyboard {
     getUla: () => SpectrumUla | null,
     setKey?: (label: string, down: boolean) => void,
     onLoadEmpty?: () => void,
-    waitFrames?: (n: number) => Promise<void>,
   ) {
     this.getUla = getUla;
     this.setKeyFn = setKey ?? null;
     this.onLoadEmpty = onLoadEmpty ?? null;
-    this.waitFramesFn = waitFrames ?? null;
     this.root = document.createElement('div');
     this.root.className = 'spec-kbd';
     // Lives on the Spectrum TTY tab — always visible there (do not hide/show
@@ -305,7 +298,7 @@ export class SpectrumKeyboard {
   async typeLoadEmpty(): Promise<void> {
     if (!this.ula() && !this.setKeyFn) return;
     this.clearAll();
-    await this.autoHold(AUTO_GAP_FRAMES, AUTO_GAP_MS);
+    await sleep(AUTO_GAP_MS);
     await this.autoTap('J'); // keyword LOAD
     await this.autoTapQuote();
     await this.autoTapQuote();
@@ -315,9 +308,9 @@ export class SpectrumKeyboard {
 
   private async autoTap(id: string): Promise<void> {
     this.press(id);
-    await this.autoHold(AUTO_HOLD_FRAMES, AUTO_HOLD_MS);
+    await sleep(AUTO_HOLD_MS);
     this.release(id);
-    await this.autoHold(AUTO_GAP_FRAMES, AUTO_GAP_MS);
+    await sleep(AUTO_GAP_MS);
   }
 
   /** Sym+P for `"` then full release (Sym off) so ROM can see the next key. */
@@ -329,13 +322,9 @@ export class SpectrumKeyboard {
     this.symSticky = false;
     this.applyModifiers();
     this.syncStickyUi();
-    await this.autoHold(AUTO_GAP_FRAMES, AUTO_GAP_MS);
+    await sleep(AUTO_GAP_MS);
   }
 
-  private async autoHold(frames: number, msFallback: number): Promise<void> {
-    if (this.waitFramesFn) await this.waitFramesFn(frames);
-    else await sleep(msFallback);
-  }
 }
 
 function sleep(ms: number): Promise<void> {

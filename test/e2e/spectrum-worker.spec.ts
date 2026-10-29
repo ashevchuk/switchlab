@@ -88,6 +88,39 @@ test.describe('Spectrum Worker (http)', () => {
     await expect.poll(() => spectrumScreenActive(page), { timeout: 20_000 }).toBe(true);
   });
 
+  test('TAP auto-LOAD types LOAD "" once while the RAM window follows the PC', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto(`${base}/`);
+    await waitMenubar(page);
+    await placeSpectrum48(page);
+    // The memory window's per-frame refresh slows requestAnimationFrame; the emulation keeps its own clock.
+    await page.evaluate(() => {
+      const { editor, camera } = (window as unknown as {
+        __simTest: {
+          editor: { circuit: { components: Map<string, { kind: string; pos: { x: number; y: number } }> } };
+          camera: { centerOn(p: { x: number; y: number }, z: number): void; worldToScreen(p: { x: number; y: number }, w: number, h: number): { x: number; y: number } };
+        };
+      }).__simTest;
+      const ram = [...editor.circuit.components.values()].find((c) => c.kind === 'ram')!;
+      camera.centerOn({ x: ram.pos.x - 300, y: ram.pos.y }, 1);
+      const canvas = document.getElementById('canvas')!;
+      const r = canvas.getBoundingClientRect();
+      const at = camera.worldToScreen(ram.pos, r.width, r.height);
+      canvas.dispatchEvent(new MouseEvent('dblclick', { clientX: r.left + at.x, clientY: r.top + at.y, bubbles: true }));
+    });
+    const follow = page.locator('input[name="follow-pc"]');
+    await expect(follow).toBeVisible();
+    await follow.check();
+    await loadBundledDemo(page, 'glazx');
+    await expect.poll(() => panelLog(page), { timeout: 30_000 }).toContain('Typing LOAD ""');
+    await expect
+      .poll(async () => page.evaluate(() => Number((document.querySelector('[data-act="tape-prog"]') as HTMLProgressElement | null)?.value ?? 0)), {
+        timeout: 30_000,
+      })
+      .toBeGreaterThan(0);
+    expect(await panelLog(page)).not.toContain('retrying');
+  });
+
   test('tape rewind posts and Worker stays alive after TAP demo', async ({ page }) => {
     test.setTimeout(90_000);
     await page.goto(`${base}/`);

@@ -379,11 +379,6 @@ JR spin</textarea>
       () => {
         void this.autoTypeLoadEmpty(false);
       },
-      async (n) => {
-        for (let i = 0; i < n; i++) {
-          await new Promise<void>((r) => requestAnimationFrame(() => r()));
-        }
-      },
     );
     this.specKbd.onActivity = () => this.draw();
     this.root.querySelector('.machine-panel-spec-kbd-host')!.appendChild(this.specKbd.root);
