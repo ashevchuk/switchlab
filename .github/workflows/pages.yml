@@ -32,7 +32,7 @@ jobs:
           path: dist-file
 
   deploy:
-    needs: build
+    needs: [build, test]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -41,7 +41,6 @@ jobs:
       - id: deployment
         uses: actions/deploy-pages@v4
 
-  # Does not gate the deploy: the wire-routing timing test is sensitive to runner speed.
   test:
     runs-on: ubuntu-latest
     steps:
