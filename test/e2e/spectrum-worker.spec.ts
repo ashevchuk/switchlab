@@ -121,6 +121,28 @@ test.describe('Spectrum Worker (http)', () => {
     expect(await panelLog(page)).not.toContain('retrying');
   });
 
+  test('a hung Worker is replaced, the user is told, and the new Spectrum runs', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto(`${base}/`);
+    await waitMenubar(page);
+    await placeSpectrum48(page);
+    await loadBundledDemo(page, 'rainbow');
+    await expect.poll(() => spectrumScreenActive(page), { timeout: 20_000 }).toBe(true);
+
+    const hung = page.workers().find((w) => w.url().includes('spectrum-worker'))!;
+    void hung.evaluate(() => { for (;;); }).catch(() => undefined); // never returns: the Worker thread is stuck
+
+    const toast = page.locator('.app-toast', { hasText: 'Spectrum emulator restarted' });
+    await expect(toast).toBeVisible({ timeout: 20_000 });
+    await expect(toast).toContainText('lost');
+    await expect
+      .poll(() => page.workers().filter((w) => w.url().includes('spectrum-worker') && w !== hung).length, { timeout: 5_000 })
+      .toBeGreaterThan(0);
+    // The replacement is a cold boot: the BASIC screen is painted and the machine is running again.
+    await expect.poll(() => spectrumScreenActive(page), { timeout: 20_000 }).toBe(true);
+    await expect(page.locator('.machine-panel-status')).toContainText('run');
+  });
+
   test('tape rewind posts and Worker stays alive after TAP demo', async ({ page }) => {
     test.setTimeout(90_000);
     await page.goto(`${base}/`);

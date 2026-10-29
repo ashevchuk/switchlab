@@ -58,3 +58,21 @@ export function describeError(err: unknown, source: ErrorSource): ErrorReport {
     key: `${source}:${errorName(err)}:${message}`,
   };
 }
+
+/** The advice after the Spectrum emulator Worker stopped answering. */
+export function describeWorkerRecovery(outcome: 'restarted' | 'stopped'): ErrorReport {
+  if (outcome === 'restarted') {
+    return {
+      title: 'Spectrum emulator restarted',
+      message: 'The emulation stopped responding for 3 seconds, so it was restarted.',
+      hint: 'The program in memory was lost: load your snapshot, tape or demo again. If this repeats, lower Spec× to 1× and note which program caused it.',
+      key: 'worker:restarted',
+    };
+  }
+  return {
+    title: 'Spectrum emulator stopped',
+    message: 'The emulation stopped responding again soon after a restart.',
+    hint: 'Reload the page (the circuit is autosaved) and avoid the program that caused it.',
+    key: 'worker:stopped',
+  };
+}

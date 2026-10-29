@@ -45,6 +45,21 @@ export class SpectrumWorkerHost {
   private static readonly FB_MAX_CATCHUP = 3;
   /** Last time a Worker frame arrived — used to restart a stalled 50 Hz loop. */
   private lastFrameAt = 0;
+  /** A running Worker that sends no frame for this long is hung, not slow. */
+  private static readonly HANG_MS = 3000;
+  /** Before its first frame a fresh Worker may still be downloading its script. */
+  private static readonly FIRST_FRAME_MS = 10_000;
+  private workerAnswered = false;
+  /** Restarts allowed inside RESTART_WINDOW_MS before the machine is stopped instead. */
+  private static readonly MAX_RESTARTS = 2;
+  private static readonly RESTART_WINDOW_MS = 60_000;
+  private lastTickAt = 0;
+  /** Unlike lastFrameAt, nudging the Worker does not refresh it: only a frame (or Run) does. */
+  private lastWorkerFrameAt = 0;
+  private restartTimes: number[] = [];
+  private videoEnabled = true;
+  /** Called after a hung Worker was replaced ('restarted') or given up on ('stopped'). */
+  onWorkerRecovery: ((outcome: 'restarted' | 'stopped') => void) | null = null;
   lastWatchBytes: Uint8Array | null = null;
   /** Soft-error string from the live engine (Worker frame or main tick). */
   lastSoftError: string | null = null;
@@ -60,6 +75,7 @@ export class SpectrumWorkerHost {
   /** Try to start Worker; returns true if Worker path is active. */
   start(): boolean {
     if (this.worker) return this.useWorker;
+    this.workerAnswered = false;
     try {
       const url = new URL('spectrum-worker.js', location.href);
       this.worker = new Worker(url.href);
@@ -212,6 +228,8 @@ export class SpectrumWorkerHost {
       };
       this.pendingFrame = frame;
       this.lastFrameAt = performance.now();
+      this.lastWorkerFrameAt = this.lastFrameAt;
+      this.workerAnswered = true;
       this.onFrame?.(frame);
       if (recycle) this.post({ type: 'recycleRgba', buf: recycle }, [recycle]);
     }
@@ -232,6 +250,7 @@ export class SpectrumWorkerHost {
     this.engine.running = on;
     this.fbLastMs = 0;
     this.fbAccMs = 0;
+    this.lastWorkerFrameAt = on ? performance.now() : 0;
     this.post({ type: 'setRunning', on });
   }
 
@@ -249,6 +268,7 @@ export class SpectrumWorkerHost {
 
   /** Stop rendering pictures while the Spectrum pane is hidden. */
   setVideoEnabled(on: boolean): void {
+    this.videoEnabled = on;
     if (on) this.engine.invalidateRender();
     this.post({ type: 'setVideoEnabled', on });
   }
@@ -357,6 +377,15 @@ export class SpectrumWorkerHost {
    */
   tick(wantRgba: boolean): SpectrumHostFrame | null {
     if (this.usingWorker) {
+      const now = performance.now();
+      // rAF stops in a background tab; the gap that follows says nothing about the Worker.
+      if (this.lastTickAt !== 0 && now - this.lastTickAt > SpectrumWorkerHost.HANG_MS / 2) this.lastWorkerFrameAt = now;
+      this.lastTickAt = now;
+      const hangMs = this.workerAnswered ? SpectrumWorkerHost.HANG_MS : SpectrumWorkerHost.FIRST_FRAME_MS;
+      if (this.engine.running && this.lastWorkerFrameAt !== 0 && now - this.lastWorkerFrameAt > hangMs) {
+        this.recoverHungWorker(now);
+        return null;
+      }
       // Recover if the Worker loop never started (e.g. setRunning raced the
       // Worker script load, or the tab resumed with running=true).
       if (this.engine.running && this.lastFrameAt !== 0 && performance.now() - this.lastFrameAt > 400) {
@@ -402,6 +431,38 @@ export class SpectrumWorkerHost {
       if (!r.running) break;
     }
     return last;
+  }
+
+  /**
+   * The Worker holds the emulated RAM, so a replacement starts from a cold boot of the
+   * same model with the main thread's settings; the running program is lost.
+   */
+  private recoverHungWorker(now: number): void {
+    const model = this.engine.mmu.model || '48';
+    this.restartTimes = this.restartTimes.filter((t) => now - t < SpectrumWorkerHost.RESTART_WINDOW_MS);
+    const giveUp = this.restartTimes.length >= SpectrumWorkerHost.MAX_RESTARTS;
+    this.restartTimes.push(now);
+    this.fallbackToMain();
+    this.lastFrameAt = 0;
+    this.lastWorkerFrameAt = 0;
+    if (giveUp) {
+      this.engine.running = false;
+      this.onWorkerRecovery?.('stopped');
+      return;
+    }
+    this.start();
+    this.boot(model);
+    this.post({ type: 'setAudioSampleRate', rate: this.engine.audioSampleRate });
+    this.post({ type: 'setAudioEnabled', on: this.engine.audioEnabled });
+    this.post({ type: 'setVideoEnabled', on: this.videoEnabled });
+    this.post({ type: 'setTurbo', turbo: this.engine.turbo });
+    this.post({ type: 'setBreakpointPc', pc: this.engine.breakpointPc });
+    this.post({ type: 'setBreakWriteAddr', addr: this.engine.breakWriteAddr });
+    this.post({ type: 'setWatchAddr', addr: this.engine.watchAddr });
+    this.setRunning(true);
+    this.lastFrameAt = now;
+    this.lastWorkerFrameAt = now;
+    this.onWorkerRecovery?.('restarted');
   }
 
   mountTap(data: Uint8Array, cold = false) {

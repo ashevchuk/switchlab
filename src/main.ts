@@ -79,7 +79,7 @@ import { IoMapViewer } from './ui/IoMapViewer.js';
 import { draw } from './ui/Renderer.js';
 import { makeSoftCanvasResolve } from './ui/softCanvasResolve.js';
 import { chipBoxSize, isOrientable, memoryBoxSize, orientSelection } from './sim/orientation.js';
-import { describeError, type ErrorSource } from './ui/errorReport.js';
+import { describeError, describeWorkerRecovery, type ErrorSource } from './ui/errorReport.js';
 import { showErrorToast } from './ui/Toast.js';
 import {
   showContextMenu,
@@ -3451,6 +3451,8 @@ function reportError(err: unknown, source: ErrorSource): void {
 }
 
 let lastReportedMachineError: string | null = null;
+
+machineRunner.onSpectrumWorkerRecovery = (outcome) => showErrorToast(describeWorkerRecovery(outcome));
 
 /**
  * While a gate-level machine runs, redrawing a 100k-transistor sheet every frame

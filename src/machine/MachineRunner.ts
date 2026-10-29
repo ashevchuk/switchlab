@@ -85,6 +85,8 @@ export class MachineRunner {
   private boundaryPc: number | null = null;
   /** Called after every tenth gate phase, when the CPU is between two instructions. */
   onInstructionBoundary: (() => void) | null = null;
+  /** The Spectrum Worker hung and was replaced ('restarted') or abandoned ('stopped'). */
+  onSpectrumWorkerRecovery: ((outcome: 'restarted' | 'stopped') => void) | null = null;
   private dataClk!: InputComponent;
   private phaseClk!: InputComponent;
   private fsmLoad!: InputComponent;
@@ -379,6 +381,10 @@ export class MachineRunner {
         host.start();
         host.onError = (m) => {
           this.softError = m;
+        };
+        host.onWorkerRecovery = (outcome) => {
+          if (outcome === 'stopped') this.running = false;
+          this.onSpectrumWorkerRecovery?.(outcome);
         };
         // Frames arrive on the Worker's 50 Hz clock; audio is queued the
         // moment a frame exists so a slow/absent rAF never starves the sink.
