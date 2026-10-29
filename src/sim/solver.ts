@@ -308,12 +308,20 @@ export interface Relaxed {
   levelAt: (netIdx: number) => Level;
 }
 
-export type SolverEngine = 'jacobi' | 'event' | 'shadow';
+export type SolverEngine = 'jacobi' | 'event' | 'shadow' | 'ordered' | 'shadow-ordered';
 
 let engine: SolverEngine = 'event';
 if (typeof process !== 'undefined') {
   const requested = process.env.SOLVER_ENGINE;
-  if (requested === 'jacobi' || requested === 'event' || requested === 'shadow') engine = requested;
+  if (
+    requested === 'jacobi' ||
+    requested === 'event' ||
+    requested === 'shadow' ||
+    requested === 'ordered' ||
+    requested === 'shadow-ordered'
+  ) {
+    engine = requested;
+  }
 }
 
 export function setSolverEngine(next: SolverEngine): void {
@@ -336,6 +344,8 @@ function relax(cache: StepStructureCache, netMap: NetMap, prev: SimState, maxIte
     return jacobiRelax(cache, netMap, prev, maxIterations);
   }
   if (engine === 'event') return eventRelax(cache, prev.levelOf, maxIterations);
+  if (engine === 'ordered') return eventRelax(cache, prev.levelOf, maxIterations, true);
+  if (engine === 'shadow-ordered') return shadowOrderedRelax(cache, prev, netMap, maxIterations);
   const fast = eventRelax(cache, prev.levelOf, maxIterations);
   const dense = jacobiRelax(cache, netMap, prev, maxIterations);
   assertSameRelaxation(cache, fast, dense);
@@ -343,32 +353,173 @@ function relax(cache: StepStructureCache, netMap: NetMap, prev: SimState, maxIte
   return dense;
 }
 
+/** Ticks the ordered engine was checked against, and ticks the dense reference could not settle. */
+export const shadowOrderedStats = { compared: 0, skipped: 0, historyDependent: 0 };
+const SHADOW_SETTLE_LIMIT = 4096;
+
+/**
+ * The ordered engine reaches the fixpoint in a different order than the dense one,
+ * so only the settled result is comparable: the reference runs with a cap high
+ * enough to settle, and a tick the reference cannot settle is not compared.
+ */
+function shadowOrderedRelax(cache: StepStructureCache, prev: SimState, netMap: NetMap, maxIterations: number): Relaxed {
+  const fast = eventRelax(cache, prev.levelOf, maxIterations, true);
+  const dense = jacobiRelax(cache, netMap, prev, SHADOW_SETTLE_LIMIT);
+  if (!dense.settled) {
+    shadowOrderedStats.skipped++;
+    adoptLevelOf(cache, null, true);
+    return dense;
+  }
+  shadowOrderedStats.compared++;
+  assertSameRelaxation(cache, fast, dense, false);
+  adoptLevelOf(cache, dense.levelOf, true);
+  return dense;
+}
+
 const MISMATCH_REPORT_LIMIT = 8;
 
-function assertSameRelaxation(cache: StepStructureCache, fast: Relaxed, dense: Relaxed): void {
+/**
+ * Differences between the two engines that a floating node explains. A node in a group with
+ * no forced driver holds whatever charge the transients left, which depends on evaluation
+ * order; whatever that node gates, or is connected to, may then differ too. A difference
+ * nothing upstream explains is a real divergence.
+ */
+function explainedByFloatingNodes(cache: StepStructureCache, dense: Relaxed, differing: Set<number>): Set<number> {
+  const { netIds, transistors, driverMask, ramMask, softMask } = cache;
+  const n = netIds.length;
+  const touching: number[][] = Array.from({ length: n }, () => []);
+  transistors.forEach((t, k) => {
+    const level = dense.levelAt(t.gate);
+    if (!(t.isN ? level === 1 : level === 0) || t.drain === t.source) return;
+    touching[t.drain]!.push(k);
+    touching[t.source]!.push(k);
+  });
+  const groupOf = new Int32Array(n).fill(-1);
+  const groups: number[][] = [];
+  const forcedGroup: boolean[] = [];
+  for (let start = 0; start < n; start++) {
+    if (groupOf[start]! >= 0) continue;
+    const id = groups.length;
+    const members = [start];
+    groupOf[start] = id;
+    let forced = false;
+    for (let q = 0; q < members.length; q++) {
+      const x = members[q]!;
+      if (driverMask[x]! | ramMask[x]! | softMask[x]!) forced = true;
+      for (const k of touching[x]!) {
+        const t = transistors[k]!;
+        const y = t.drain === x ? t.source : t.drain;
+        if (groupOf[y]! < 0) {
+          groupOf[y] = id;
+          members.push(y);
+        }
+      }
+    }
+    groups.push(members);
+    forcedGroup.push(forced);
+  }
+  const gatesOfGroup: number[][] = groups.map(() => []);
+  for (const t of transistors) gatesOfGroup[groupOf[t.drain]!]!.push(t.gate);
+
+  const explained = new Set<number>();
+  const taintedGroups = new Set<number>();
+  for (const i of differing) {
+    if (forcedGroup[groupOf[i]!]) continue;
+    explained.add(i);
+    taintedGroups.add(groupOf[i]!);
+  }
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const i of differing) {
+      if (explained.has(i)) continue;
+      const group = groupOf[i]!;
+      if (taintedGroups.has(group) || gatesOfGroup[group]!.some((gate) => explained.has(gate))) {
+        for (const member of groups[group]!) if (differing.has(member)) explained.add(member);
+        taintedGroups.add(group);
+        grew = true;
+      }
+    }
+  }
+  return explained;
+}
+
+function assertSameRelaxation(cache: StepStructureCache, fast: Relaxed, dense: Relaxed, compareIterations = true): void {
   const problems: string[] = [];
-  if (fast.iterations !== dense.iterations) problems.push(`iterations ${fast.iterations} != ${dense.iterations}`);
+  if (compareIterations && fast.iterations !== dense.iterations) problems.push(`iterations ${fast.iterations} != ${dense.iterations}`);
   if (fast.settled !== dense.settled) problems.push(`settled ${fast.settled} != ${dense.settled}`);
-  let levelMismatches = 0;
+  // A floating node keeps whatever charge the transients left it, which depends on evaluation order.
+  // The ordered engine may leave such a node (and what it feeds) undefined where the dense one kept 0/1.
+  const settledMode = !compareIterations;
+  const differing = new Set<number>();
   for (let i = 0; i < cache.netIds.length; i++) {
+    if (fast.levelAt(i) !== dense.levelAt(i) || fast.levelOf.get(cache.netIds[i]!) !== dense.levelOf.get(cache.netIds[i]!)) {
+      differing.add(i);
+    }
+  }
+  const explained = settledMode && differing.size > 0 ? explainedByFloatingNodes(cache, dense, differing) : new Set<number>();
+  let levelMismatches = 0;
+  let firstMismatch = -1;
+  for (const i of differing) {
     const netId = cache.netIds[i]!;
-    if (fast.levelAt(i) === dense.levelAt(i) && fast.levelOf.get(netId) === dense.levelOf.get(netId)) continue;
+    const f = fast.levelAt(i);
+    const d = dense.levelAt(i);
+    if (explained.has(i)) {
+      shadowOrderedStats.historyDependent++;
+      continue;
+    }
+    if (firstMismatch < 0) firstMismatch = i;
     if (levelMismatches++ < MISMATCH_REPORT_LIMIT) {
-      problems.push(`net ${netId}: event ${fast.levelAt(i)} (map ${fast.levelOf.get(netId)}), dense ${dense.levelAt(i)}`);
+      problems.push(`net ${netId}: event ${f} (map ${fast.levelOf.get(netId)}), dense ${d}   [neighbours print dense/event]`);
     }
   }
   if (levelMismatches > MISMATCH_REPORT_LIMIT) problems.push(`... ${levelMismatches} nets differ in total`);
-  for (let i = 0; i < cache.netIds.length && problems.length > 0 && levelMismatches > 0; i++) {
-    if (fast.levelAt(i) === dense.levelAt(i)) continue;
+  if (firstMismatch >= 0) {
+    const gatesByChannelNet = new Map<number, number[]>();
     for (const t of cache.transistors) {
-      if (t.drain !== i && t.source !== i && t.gate !== i) continue;
-      const name = (k: number): string => `${cache.netIds[k]}=${dense.levelAt(k)}`;
+      for (const end of [t.drain, t.source]) {
+        const list = gatesByChannelNet.get(end) ?? [];
+        list.push(t.gate);
+        gatesByChannelNet.set(end, list);
+      }
+    }
+    const roots = [...differing].filter(
+      (i) => !explained.has(i) && !(gatesByChannelNet.get(i) ?? []).some((gate) => differing.has(gate)),
+    );
+    problems.push(`  ${roots.length} unexplained differences have no differing gate near them; first: ${roots.slice(0, 5).map((i) => `${cache.netIds[i]}=${dense.levelAt(i)}/${fast.levelAt(i)}`).join(', ')}`);
+    const touching = cache.transistors.filter((t) => {
+      const level = dense.levelAt(t.gate);
+      return (t.isN ? level === 1 : level === 0) && t.drain !== t.source;
+    });
+    const group = [firstMismatch];
+    const inGroup = new Set(group);
+    for (let q = 0; q < group.length; q++) {
+      for (const t of touching) {
+        const other = t.drain === group[q] ? t.source : t.source === group[q] ? t.drain : -1;
+        if (other >= 0 && !inGroup.has(other)) {
+          inGroup.add(other);
+          group.push(other);
+        }
+      }
+    }
+    const forcedMembers = group.filter((x) => cache.driverMask[x]! | cache.ramMask[x]! | cache.softMask[x]!);
+    problems.push(
+      `  dense group of ${cache.netIds[firstMismatch]}: ${group.length} nets, forced by ${forcedMembers.length}` +
+        ` [${forcedMembers.slice(0, 4).map((x) => `${cache.netIds[x]}=${dense.levelAt(x)}/${fast.levelAt(x)}`).join(', ')}]` +
+        `, ${group.filter((x) => fast.levelAt(x) !== dense.levelAt(x)).length} members differ`,
+    );
+    for (const t of cache.transistors) {
+      if (t.drain !== firstMismatch && t.source !== firstMismatch && t.gate !== firstMismatch) continue;
+      const name = (k: number): string => `${cache.netIds[k]}=${dense.levelAt(k)}/${fast.levelAt(k)}`;
       problems.push(`  ${t.isN ? 'N' : 'P'} gate ${name(t.gate)} drain ${name(t.drain)} source ${name(t.source)}`);
     }
-    break;
   }
-  const onlyFast = [...fast.contended].filter((id) => !dense.contended.has(id));
-  const onlyDense = [...dense.contended].filter((id) => !fast.contended.has(id));
+  const sameLevel = (id: string): boolean => {
+    const index = cache.indexOf.get(id);
+    return index === undefined || !differing.has(index);
+  };
+  const onlyFast = [...fast.contended].filter((id) => !dense.contended.has(id) && sameLevel(id));
+  const onlyDense = [...dense.contended].filter((id) => !fast.contended.has(id) && sameLevel(id));
   if (onlyFast.length > 0) problems.push(`contended only in event: ${onlyFast.slice(0, MISMATCH_REPORT_LIMIT).join(', ')}`);
   if (onlyDense.length > 0) problems.push(`contended only in dense: ${onlyDense.slice(0, MISMATCH_REPORT_LIMIT).join(', ')}`);
   if (problems.length > 0) throw new Error(`Event solver diverged from the dense solver:\n${problems.join('\n')}`);

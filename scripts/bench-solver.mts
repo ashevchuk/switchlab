@@ -65,3 +65,4 @@ if (flag('--check')) {
   }
   if (failed) process.exit(1);
 }
+{ const stats = (await import('../src/sim/solver.js')).shadowOrderedStats; if (stats.compared + stats.skipped > 0) console.log('SHADOW-ORDERED', JSON.stringify(stats)); }
