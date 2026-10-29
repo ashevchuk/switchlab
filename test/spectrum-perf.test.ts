@@ -2,7 +2,7 @@
  * Spectrum / Z80 hot-path behaviour added for the browser perf pass:
  * contention window, dirty skip, AY envelope sync, Worker self-clock.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ContendedStub } from '../src/machine/spectrum/expansions.js';
 import { SpectrumEngine } from '../src/machine/spectrum/engine.js';
 import { Ay8912 } from '../src/machine/spectrum/ay8912.js';
@@ -38,7 +38,13 @@ describe('ContendedStub display window', () => {
 });
 
 describe('SpectrumEngine dirty skip', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('does not re-render an unchanged display file', () => {
+    // The FLASH phase comes from the wall clock; a phase flip between two frames re-renders legitimately.
+    vi.spyOn(performance, 'now').mockReturnValue(0);
     const eng = new SpectrumEngine();
     eng.audioEnabled = false;
     eng.boot('48');
