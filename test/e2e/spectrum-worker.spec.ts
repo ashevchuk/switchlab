@@ -144,7 +144,7 @@ test.describe('Spectrum Worker (http)', () => {
   });
 
   test('labels say what the Spectrum is running on and what the RAM window shows', async ({ page }) => {
-    test.setTimeout(60_000);
+    test.setTimeout(150_000);
     await page.goto(`${base}/`);
     await waitMenubar(page);
     await placeSpectrum48(page);
@@ -165,10 +165,38 @@ test.describe('Spectrum Worker (http)', () => {
       canvas.dispatchEvent(new MouseEvent('dblclick', { clientX: r.left + at.x, clientY: r.top + at.y, bubbles: true }));
     });
     const memoryStatus = page.locator('.memory-editor .lab-panel-status');
-    await expect(memoryStatus).toContainText("Not the Spectrum's memory");
+    await expect(memoryStatus).toContainText("Live view of the Spectrum's memory");
+    // The window shows what the Worker really holds: ROM starts with DI, and the BASIC system variables are filled in.
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const ram = [...(window as unknown as { __simTest: { editor: { circuit: { components: Map<string, { kind: string; bytes?: Uint8Array }> } } } }).__simTest.editor.circuit.components.values()]
+            .filter((c) => c.kind === 'ram')
+            .at(-1)!;
+          return { di: ram.bytes![0], vars: ram.bytes!.slice(0x5c00, 0x5d00).filter(Boolean).length > 8 };
+        }),
+      { timeout: 10_000 })
+      .toEqual({ di: 0xf3, vars: true });
+    await expect(page.locator('.memory-editor [data-act="fill0"]')).toBeDisabled();
+    await expect(page.locator('.memory-editor [data-act="asm-go"]')).toBeDisabled();
 
     await page.selectOption('.machine-panel select[data-act="speed"]', 'turbo');
-    await expect(memoryStatus).toContainText('A copy of the emulator');
+    await expect(memoryStatus).toContainText('copied from the emulator once');
+    // The placed RAM now belongs to the gate-level Z80: a byte written there must survive the next frames.
+    const ramByte = (value?: number) =>
+      page.evaluate((v) => {
+        const ram = [...(window as unknown as { __simTest: { editor: { circuit: { components: Map<string, { kind: string; bytes?: Uint8Array }> } } } }).__simTest.editor.circuit.components.values()]
+          .filter((c) => c.kind === 'ram')
+          .at(-1)!;
+        if (v !== undefined) ram.bytes![0x9000] = v;
+        return ram.bytes![0x9000];
+      }, value);
+    // The transistor circuit loads lazily on the first switch to Gates; until then no gate step runs.
+    await expect(page.locator('#status')).toContainText('flat nets', { timeout: 90_000 });
+    await page.waitForTimeout(500);
+    await ramByte(0xab);
+    await page.waitForTimeout(1500);
+    expect(await ramByte()).toBe(0xab);
     await expect(page.locator('[data-spec-model]')).toContainText('gates (experimental)');
     await expect(page.locator('.machine-panel-status')).toContainText('experimental');
   });

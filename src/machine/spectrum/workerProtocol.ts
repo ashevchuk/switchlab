@@ -45,7 +45,8 @@ export type WorkerInMsg =
   | { type: 'loadZ80'; data: ArrayBuffer }
   | { type: 'loadScr'; data: ArrayBuffer }
   | { type: 'setRom48Basic'; on: boolean }
-  | { type: 'getSnapshot' };
+  | { type: 'getSnapshot' }
+  | { type: 'getMemory' };
 
 export type WorkerOutMsg =
   | {
@@ -95,5 +96,7 @@ export type WorkerOutMsg =
       softError: string | null;
     }
   | { type: 'snapshot'; sna: ArrayBuffer; z80: ArrayBuffer; scr: ArrayBuffer }
+  /** The 64K address space as the Z80 sees it right now (ROM, paged banks and all). */
+  | { type: 'memory'; ram: ArrayBuffer }
   | { type: 'mounted'; kind: string; blocks?: number; label?: string; sides?: number }
   | { type: 'error'; message: string };

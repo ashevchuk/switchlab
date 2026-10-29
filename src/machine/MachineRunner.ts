@@ -496,6 +496,27 @@ export class MachineRunner {
     return result;
   }
 
+  private liveMemoryPending = false;
+
+  /**
+   * Copy the Spectrum's live address space into the placed RAM so the memory window can show it.
+   * Soft only: at Gates speed that RAM is what the transistor Z80 executes from.
+   * Returns false when nothing was refreshed (no Spectrum, Gates speed, or a request in flight).
+   */
+  async refreshLiveMemory(): Promise<boolean> {
+    if (!this.spectrumHost || !this.isSoft || !this.ram || this.ram.bytes.length < 0x10000) return false;
+    if (this.liveMemoryPending) return false;
+    this.liveMemoryPending = true;
+    try {
+      const memory = await this.spectrumHost.getMemory();
+      if (!this.isSoft || !this.ram) return false; // the user switched to Gates while we waited
+      this.ram.bytes.set(memory);
+      return true;
+    } finally {
+      this.liveMemoryPending = false;
+    }
+  }
+
   /** Serialize current Spectrum state as .SNA bytes (live Worker when active). */
   async saveSpectrumSna(): Promise<Uint8Array> {
     if (!this.spectrumHost) throw new Error('No Spectrum machine to save');
@@ -797,10 +818,32 @@ export class MachineRunner {
       this.booted = false;
       this.boot();
     }
-    // Spectrum Gates: mirror MMU → flat RAM before the transistor CPU fetches.
+    // Spectrum Gates: start the transistor CPU on the memory the Spectrum has right now.
     if (prev === 'soft' && speed !== 'soft' && this.isSpectrum) {
-      this.mirrorSpectrumToGateRam();
+      this.loadGateRamFromLive();
     }
+  }
+
+  private gateRamPending = false;
+
+  /**
+   * One copy, at the moment of the switch: from then on the placed RAM belongs to the gate-level Z80,
+   * and only the display file goes back to the emulator. Gate steps wait until the copy has arrived.
+   */
+  private loadGateRamFromLive(): void {
+    const host = this.spectrumHost;
+    if (!host || !this.ram || this.ram.bytes.length < 0x10000) return;
+    this.gateRamPending = true;
+    host
+      .getMemory()
+      .then((memory) => {
+        if (this.ram && !this.isSoft) this.ram.bytes.set(memory);
+      })
+      // Worker unreachable: the in-page engine's cold copy is better than an empty RAM.
+      .catch(() => this.mirrorSpectrumToGateRam())
+      .finally(() => {
+        this.gateRamPending = false;
+      });
   }
 
   /**
@@ -1160,10 +1203,10 @@ export class MachineRunner {
       }
       return;
     }
+    if (this.gateRamPending) return;
     const irqWasPending = !!(this.spectrum?.irqPending);
     const iff1WasOn =
       !!this.cpu && !!this.readPin && this.readPin(this.cpu.iff1[0]!) === 1;
-    if (this.isSpectrum) this.mirrorSpectrumToGateRam();
     this.syncSpectrumGateInt();
     for (let i = 0; i < 10; i++) this.stepPhase();
     // Nested 4-T bus may hold the instruction ring — burn extra phases until idle.
@@ -1245,13 +1288,13 @@ export class MachineRunner {
       }
       return true;
     }
+    if (this.gateRamPending) return false;
     try {
       const maxPhases = PHASES_PER_FRAME[this.speed as Exclude<RunSpeed, 'soft'>];
       const budgetMs = this.speed === 'free' ? FREE_BUDGET_MS : GATE_BUDGET_MS;
       const deadline = performance.now() + budgetMs;
       let n = 0;
       if (this.spectrum) this.spectrum.pulseFrameIrq();
-      if (this.isSpectrum) this.mirrorSpectrumToGateRam();
       let instrIrqPending = false;
       let instrIff1WasOn = false;
       while (n < maxPhases && performance.now() < deadline && this.running) {

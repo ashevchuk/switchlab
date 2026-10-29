@@ -287,6 +287,12 @@ function onMsg(ev: MessageEvent<WorkerInMsg>): void {
       case 'setRom48Basic':
         engine.setRom48Basic(msg.on);
         break;
+      case 'getMemory': {
+        const ram = new Uint8Array(0x10000);
+        for (let a = 0; a < 0x10000; a++) ram[a] = engine.mmu.read(a);
+        post({ type: 'memory', ram: ram.buffer }, [ram.buffer]);
+        return;
+      }
       case 'getSnapshot': {
         const sna = engine.saveSna().buffer.slice(0) as ArrayBuffer;
         const z80 = engine.saveZ80().buffer.slice(0) as ArrayBuffer;

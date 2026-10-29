@@ -64,6 +64,13 @@ export class SpectrumWorkerHost {
   /** Soft-error string from the live engine (Worker frame or main tick). */
   lastSoftError: string | null = null;
   onError: ((msg: string) => void) | null = null;
+  private pendingMemory:
+    | {
+        resolve: (v: Uint8Array) => void;
+        reject: (e: Error) => void;
+        timer: ReturnType<typeof setTimeout>;
+      }
+    | null = null;
   private pendingSnapshot:
     | {
         resolve: (v: SpectrumSnapshotBundle) => void;
@@ -104,6 +111,11 @@ export class SpectrumWorkerHost {
 
   private fallbackToMain(): void {
     this.useWorker = false;
+    if (this.pendingMemory) {
+      this.pendingMemory.reject(new Error('Spectrum worker stopped'));
+      clearTimeout(this.pendingMemory.timer);
+      this.pendingMemory = null;
+    }
     if (this.pendingSnapshot) {
       this.pendingSnapshot.reject(new Error('Spectrum worker stopped'));
       clearTimeout(this.pendingSnapshot.timer);
@@ -142,6 +154,14 @@ export class SpectrumWorkerHost {
         this.pendingSnapshot.reject(new Error(msg.message));
         clearTimeout(this.pendingSnapshot.timer);
         this.pendingSnapshot = null;
+      }
+      return;
+    }
+    if (msg.type === 'memory') {
+      if (this.pendingMemory) {
+        clearTimeout(this.pendingMemory.timer);
+        this.pendingMemory.resolve(new Uint8Array(msg.ram));
+        this.pendingMemory = null;
       }
       return;
     }
@@ -534,6 +554,26 @@ export class SpectrumWorkerHost {
       }, timeoutMs);
       this.pendingSnapshot = { resolve, reject, timer };
       this.post({ type: 'getSnapshot' });
+    });
+  }
+
+  /** The 64K address space as the Z80 sees it now: from the Worker when it runs there, else from the in-page engine. */
+  async getMemory(timeoutMs = 2_000): Promise<Uint8Array> {
+    if (!this.usingWorker) {
+      const ram = new Uint8Array(0x10000);
+      for (let a = 0; a < 0x10000; a++) ram[a] = this.engine.mmu.read(a);
+      return ram;
+    }
+    if (this.pendingMemory) throw new Error('A memory request is already pending');
+    return new Promise<Uint8Array>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pendingMemory) {
+          this.pendingMemory = null;
+          reject(new Error('Spectrum memory request timed out'));
+        }
+      }, timeoutMs);
+      this.pendingMemory = { resolve, reject, timer };
+      this.post({ type: 'getMemory' });
     });
   }
 

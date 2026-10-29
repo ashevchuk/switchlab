@@ -104,6 +104,7 @@ export class MemoryEditor {
   /** Soft PC highlight (null = off). Independent of edit cursor unless Follow PC. */
   private livePc: number | null = null;
   private notice: string | null = null;
+  private readOnly = false;
   /** After typing the high nibble, wait for the low one before advancing. */
   private pendingHi: number | null = null;
   private renderPending = false;
@@ -268,6 +269,16 @@ export class MemoryEditor {
     this.renderStatus();
   }
 
+  /** A live view of memory that something else owns: every way of changing a byte is switched off. */
+  setReadOnly(on: boolean): void {
+    if (on === this.readOnly) return;
+    this.readOnly = on;
+    this.pendingHi = null;
+    for (const act of ['fill0', 'load-file', 'asm', 'asm-go']) {
+      (this.root.querySelector(`[data-act="${act}"]`) as HTMLButtonElement).disabled = on;
+    }
+  }
+
   /** A warning shown instead of the usual hint, e.g. when this memory is not what the machine runs on. */
   setNotice(text: string | null): void {
     if (text === this.notice) return;
@@ -352,6 +363,7 @@ export class MemoryEditor {
   }
 
   private doAssemble(go: boolean): void {
+    if (this.readOnly) return;
     if (!this.mem) {
       this.statusEl.textContent = 'No RAM/ROM attached.';
       return;
@@ -484,6 +496,11 @@ export class MemoryEditor {
       ev.stopPropagation();
     };
 
+    if (this.readOnly && (ev.key === 'Backspace' || ev.key === 'Delete' || /^[0-9a-fA-F]$/.test(ev.key))) {
+      swallow();
+      return;
+    }
+
     const len = this.mem.bytes.length;
     const move = (delta: number): void => {
       swallow();
@@ -578,7 +595,7 @@ export class MemoryEditor {
   }
 
   private onPaste(ev: ClipboardEvent): void {
-    if (!this.mem) return;
+    if (!this.mem || this.readOnly) return;
     const text = ev.clipboardData?.getData('text') ?? '';
     const data = parseHexBlob(text);
     if (data.length === 0) return;
@@ -591,14 +608,14 @@ export class MemoryEditor {
   }
 
   private writeByte(addr: number, value: number): void {
-    if (!this.mem || addr < 0 || addr >= this.mem.bytes.length) return;
+    if (!this.mem || this.readOnly || addr < 0 || addr >= this.mem.bytes.length) return;
     this.mem.bytes[addr] = value & 0xff;
     this.refreshDisasm();
     this.onChange?.();
   }
 
   private fill(value: number): void {
-    if (!this.mem) return;
+    if (!this.mem || this.readOnly) return;
     this.mem.bytes.fill(value & 0xff);
     this.pendingHi = null;
     this.render(true);
@@ -619,7 +636,7 @@ export class MemoryEditor {
   }
 
   private async loadFile(file: File): Promise<void> {
-    if (!this.mem) return;
+    if (!this.mem || this.readOnly) return;
     const buf = await file.arrayBuffer();
     const isText = /\.(hex|txt)$/i.test(file.name) || file.type.startsWith('text/');
     let data: number[];

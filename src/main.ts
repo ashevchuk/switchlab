@@ -3450,12 +3450,15 @@ function reportError(err: unknown, source: ErrorSource): void {
   showErrorToast(report);
 }
 
+const LIVE_MEMORY_REFRESH_MS = 500;
+let lastLiveMemoryMs = 0;
+
 /** What the memory window must say when the RAM it shows is not the memory the machine runs on. */
 function memoryNotice(shown: RamComponent | RomComponent | null): string | null {
   if (!shown || !machineRunner.isSpectrum || shown !== machineRunner.machineRam) return null;
   return machineRunner.isSoft
-    ? "Not the Spectrum's memory: the emulator keeps its own, so this RAM stays empty in Soft mode."
-    : "A copy of the emulator's memory, refreshed every frame. The Z80's writes outside the screen are overwritten.";
+    ? "Live view of the Spectrum's memory (read-only, refreshed twice a second)."
+    : "The gate-level Z80's own memory: copied from the emulator once, when you switched to Gates. Only the screen goes back; the Z80 itself restarts from 0000.";
 }
 
 let lastReportedMachineError: string | null = null;
@@ -3496,6 +3499,17 @@ function runFrame(): void {
     const tinyCpu = memoryEditor.memory?.kind === 'ram' ? tinyCpuForRam(topCircuit, library, memoryEditor.memory) : undefined;
     memoryEditor.setIsa(tinyCpu ? TINY_EDITOR_ISA : null);
     memoryEditor.setNotice(memoryNotice(memoryEditor.memory));
+    const liveSpectrumMemory = memoryNotice(memoryEditor.memory) !== null && machineRunner.isSoft;
+    memoryEditor.setReadOnly(liveSpectrumMemory);
+    if (liveSpectrumMemory && performance.now() - lastLiveMemoryMs >= LIVE_MEMORY_REFRESH_MS) {
+      lastLiveMemoryMs = performance.now();
+      machineRunner
+        .refreshLiveMemory()
+        .then((refreshed) => {
+          if (refreshed) memoryEditor.refresh();
+        })
+        .catch((err: unknown) => console.warn('Spectrum memory refresh failed', err));
+    }
     const soft = machineRunner.isSoft ? machineRunner.softCpu : null;
     const pc = tinyCpu ? readTinyPc(tinyCpu) : soft ? soft.pc & 0xffff : machineRunner.gatePc;
     if (memoryEditor.setLivePc(pc) && (tinyCpu || soft)) machineWorked = true;
