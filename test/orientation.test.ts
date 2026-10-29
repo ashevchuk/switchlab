@@ -4,6 +4,8 @@ import { Circuit } from '../src/sim/Circuit.js';
 import { makeButton, makeChipInstance, makeLed, makeRam, makeSource } from '../src/sim/library.js';
 import {
   applyPinLayout,
+  chipBoxSize,
+  chipPinEdge,
   getOrientation,
   rotateCw,
   setOrientation,
@@ -191,5 +193,53 @@ describe('pin order', () => {
     applyPinLayout(nand);
     expect(nand.pins.a!.pos.y).toBe(yB);
     expect(nand.pins.b!.pos.y).toBe(yA);
+  });
+});
+
+describe('chip body follows rotation and flip', () => {
+  const rotations = [0, 90, 180, 270] as const;
+
+  it('every pin sits inside the oriented body, on the edge chipPinEdge names', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+    const def = library.list().find((d) => d.name === 'NAND')!;
+    for (const rotation of rotations) {
+      for (const mirrorX of [false, true]) {
+        const c = new Circuit();
+        const chip = makeChipInstance(c, def, { x: 0, y: 0 });
+        setOrientation(chip, rotation, mirrorX, false);
+        applyPinLayout(chip);
+        const { w, h } = chipBoxSize(chip);
+        const where = `rotation ${rotation}, mirrorX ${mirrorX}`;
+        for (const pin of Object.values(chip.pins)) {
+          const { x, y } = pin.pos;
+          expect(Math.abs(x), where).toBeLessThanOrEqual(w / 2);
+          expect(Math.abs(y), where).toBeLessThanOrEqual(h / 2);
+          switch (chipPinEdge(chip, pin.name)) {
+            case 'left':
+              expect(x, where).toBeLessThan(0);
+              break;
+            case 'right':
+              expect(x, where).toBeGreaterThan(0);
+              break;
+            case 'top':
+              expect(y, where).toBeLessThan(0);
+              break;
+            case 'bottom':
+              expect(y, where).toBeGreaterThan(0);
+              break;
+          }
+        }
+      }
+    }
+  });
+
+  it('a quarter turn swaps the body width and height', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+    const chip = makeChipInstance(new Circuit(), library.list().find((d) => d.name === 'NAND')!, { x: 0, y: 0 });
+    const upright = chipBoxSize(chip);
+    setOrientation(chip, 90, false, false);
+    expect(chipBoxSize(chip)).toEqual({ w: upright.h, h: upright.w });
   });
 });

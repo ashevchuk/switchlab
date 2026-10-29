@@ -1,4 +1,4 @@
-import { bodyEdgeToward, getOrientation, transformOffset } from '../sim/orientation.js';
+import { bodyEdgeToward, chipBoxSize, chipPinEdge, getOrientation, transformOffset, type BodyEdge } from '../sim/orientation.js';
 import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import type { Circuit } from '../sim/Circuit.js';
 import { decodeBusProbe } from '../sim/busProbe.js';
@@ -105,7 +105,7 @@ export function componentRadius(c: Component): { rx: number; ry: number } {
     case 'port':
       return { rx: 40, ry: 28 };
     case 'chip':
-      return { rx: chipBodyWidth(c) / 2 + 20, ry: chipBoxHeight(c) / 2 + 20 };
+      return { rx: chipBoxSize(c).w / 2 + 20, ry: chipBoxSize(c).h / 2 + 20 };
     case 'ram':
       return { rx: CHIP_INSTANCE_WIDTH / 2 + 20, ry: chipInstanceHeight(ramPortCount(c)) / 2 + 20 };
     case 'rom':
@@ -938,10 +938,11 @@ function drawBodyPinLabel(
   labelText?: string,
   bodyW = CHIP_INSTANCE_WIDTH,
   bodyH?: number,
+  edgeOverride?: BodyEdge,
 ): void {
   const halfH = bodyH != null ? bodyH / 2 : bodyW / 2;
   const h = halfH * 2;
-  const edge = pinLabelEdge(pin.pos, cx, cy, bodyW, h);
+  const edge = edgeOverride ?? pinLabelEdge(pin.pos, cx, cy, bodyW, h);
 
   const inset = 10;
   let lx = pin.pos.x;
@@ -959,8 +960,10 @@ function drawBodyPinLabel(
     align = 'right';
   } else if (edge === 'top') {
     ly = pin.pos.y + inset;
+    align = edgeOverride ? 'right' : align;
   } else {
     ly = pin.pos.y - inset;
+    align = edgeOverride ? 'left' : align;
   }
 
   ctx.save();
@@ -968,7 +971,14 @@ function drawBodyPinLabel(
   ctx.textAlign = align;
   ctx.textBaseline = baseline;
   ctx.fillStyle = COLOR.textDim;
-  ctx.fillText(labelText ?? formatPinLabel(pin.name), lx, ly);
+  if (edgeOverride && (edge === 'top' || edge === 'bottom')) {
+    // Pins on a turned chip's top/bottom rows are narrower than their names: read them sideways.
+    ctx.translate(lx, ly);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText(labelText ?? formatPinLabel(pin.name), 0, 0);
+  } else {
+    ctx.fillText(labelText ?? formatPinLabel(pin.name), lx, ly);
+  }
   ctx.restore();
 }
 
@@ -1772,8 +1782,7 @@ function drawComponent(
     }
     case 'chip': {
       const { x, y } = c.pos;
-      const w = chipBodyWidth(c);
-      const h = chipBoxHeight(c);
+      const { w, h } = chipBoxSize(c);
       if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 8, ringColor);
       const grad = ctx.createLinearGradient(x - w / 2, y - h / 2, x + w / 2, y + h / 2);
       grad.addColorStop(0, COLOR.chipBody);
@@ -1798,7 +1807,7 @@ function drawComponent(
             }
           }
         }
-        drawBodyPinLabel(ctx, p, x, y, label, w, h);
+        drawBodyPinLabel(ctx, p, x, y, label, w, h, chipPinEdge(c, p.name));
       }
       ctx.fillStyle = COLOR.text;
       const name =

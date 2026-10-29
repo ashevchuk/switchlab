@@ -15,6 +15,7 @@ import {
   CHIP_PIN_DX,
   CHIP_PIN_DX_RIGHT,
   chipBodyWidth,
+  chipBoxHeight,
   chipPinDxPair,
   chipPinDys,
   LAYOUT,
@@ -363,3 +364,28 @@ export function orientSelection(
   }
 }
 
+
+export type BodyEdge = 'left' | 'right' | 'top' | 'bottom';
+
+/** Body box of a chip as drawn: width and height swap when it is turned a quarter. */
+export function chipBoxSize(c: ChipInstanceComponent): { w: number; h: number } {
+  const w = chipBodyWidth(c);
+  const h = chipBoxHeight(c);
+  return c.rotation === 90 || c.rotation === 270 ? { w: h, h: w } : { w, h };
+}
+
+/** The body edge a chip pin sits on after flip and rotation. */
+export function chipPinEdge(c: ChipInstanceComponent, pinName: string): BodyEdge {
+  let left = c.pinSide?.[pinName] !== 1;
+  if (c.mirrorX) left = !left;
+  switch (c.rotation) {
+    case 90:
+      return left ? 'top' : 'bottom';
+    case 180:
+      return left ? 'right' : 'left';
+    case 270:
+      return left ? 'bottom' : 'top';
+    default:
+      return left ? 'left' : 'right';
+  }
+}
