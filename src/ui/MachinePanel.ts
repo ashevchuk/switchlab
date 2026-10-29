@@ -47,6 +47,13 @@ const CELL_H = 15;
 const PAD = 6;
 const BMP_SCALE = 2;
 const BMP_GAP = 6;
+const MAX_PENDING_KEYS = 16;
+/**
+ * After a key is read, the next waits this many gate instructions: the monitor clears the
+ * key status itself a few instructions after reading the data and would erase a key posted
+ * in between.
+ */
+const KEY_GAP_INSTRUCTIONS = 40;
 const SPEC_SCALE = 2;
 
 /**
@@ -124,6 +131,12 @@ export class MachinePanel {
    * injecting keys into the next session.
    */
   private autoTypeGen = 0;
+  /**
+   * The keyboard register holds one key. A gate-level CPU reads it once in several
+   * seconds, so keys typed meanwhile wait here instead of overwriting each other.
+   */
+  private readonly pendingKeys: number[] = [];
+  private keyGapLeft = 0;
   private lastTapeSig = '';
   private activeTab: 'console' | 'spectrum' = 'console';
   private wasSpectrum = false;
@@ -1554,9 +1567,11 @@ JR spin</textarea>
   }
 
   bindRunner(runner: MachineRunner | null): void {
+    if (this.runner) this.runner.onInstructionBoundary = null;
     this.runner = runner;
     if (runner) {
       this.speedSel.value = runner.speed;
+      runner.onInstructionBoundary = () => this.deliverPendingKey(true);
     }
     this.refreshControls();
   }
@@ -1619,6 +1634,8 @@ JR spin</textarea>
 
   private detachRamOnly(): void {
     this.cancelAutoType();
+    this.pendingKeys.length = 0;
+    this.keyGapLeft = 0;
     if (this.keyHandler) {
       this.canvas.removeEventListener('keydown', this.keyHandler);
       this.specCanvas.removeEventListener('keydown', this.keyHandler);
@@ -1726,6 +1743,7 @@ JR spin</textarea>
    */
   draw(force = false): void {
     if (!this.ram) return;
+    if (!this.gateMachineRunning()) this.deliverPendingKey();
     if (this.activeTab === 'console') this.drawConsole();
     else this.drawSpectrum();
     const now = performance.now();
@@ -2023,9 +2041,33 @@ JR spin</textarea>
     if (code === null) return;
     e.preventDefault();
     e.stopPropagation();
+    if (this.pendingKeys.length < MAX_PENDING_KEYS) this.pendingKeys.push(code);
+    if (!this.gateMachineRunning()) this.deliverPendingKey();
+    this.draw();
+  }
+
+  /** A gate-level CPU latches a key part-way through an instruction, so keys are only posted between instructions. */
+  private gateMachineRunning(): boolean {
+    return !!this.runner?.running && !this.runner.isSoft;
+  }
+
+  private keyRegisterBusy(): boolean {
+    const devices = this.runner?.softDevices;
+    if (devices?.realCpm) return devices.keyWaiting;
+    const bytes = this.ram!.bytes;
+    return (bytes[softIoLayoutForRam(bytes).keyStatus] ?? 0) !== 0;
+  }
+
+  private deliverPendingKey(afterInstruction = false): void {
+    if (!this.ram || this.pendingKeys.length === 0 || this.keyRegisterBusy()) return;
+    if (afterInstruction && this.keyGapLeft > 0) {
+      this.keyGapLeft--;
+      return;
+    }
+    if (afterInstruction) this.keyGapLeft = KEY_GAP_INSTRUCTIONS;
+    const code = this.pendingKeys.shift()!;
     if (this.runner?.softDevices) this.runner.softDevices.injectKey(this.ram.bytes, code);
     else injectKey(this.ram.bytes, code);
-    this.draw();
   }
 
   private onKeyUp(e: KeyboardEvent): void {

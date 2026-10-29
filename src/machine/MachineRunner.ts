@@ -52,6 +52,9 @@ export const SPECTRUM_OPS_PER_FRAME = ENGINE_OPS;
 export type SpectrumTurbo = EngineTurbo;
 
 /** Max wall-clock ms of gate-level phases per animation frame. */
+/** The control FSM takes this many phases per Z80 instruction. */
+const GATE_PHASES_PER_INSTRUCTION = 10;
+
 export const GATE_BUDGET_MS = 12;
 
 /** Wider wall-clock budget for free-running gate speed (one frame may burn more CPU). */
@@ -78,6 +81,9 @@ export class MachineRunner {
   private inputIds: string[] = [];
   private reset!: InputComponent;
   private aReset!: InputComponent;
+  private gatePhasesSinceBoot = 0;
+  /** Called after every tenth gate phase, when the CPU is between two instructions. */
+  onInstructionBoundary: (() => void) | null = null;
   private dataClk!: InputComponent;
   private phaseClk!: InputComponent;
   private fsmLoad!: InputComponent;
@@ -981,6 +987,7 @@ export class MachineRunner {
     for (const we of this.seedWes) we.value = 0;
     pulse(this.dataClk);
     this.booted = true;
+    this.gatePhasesSinceBoot = 0;
     this.soft = createSoftZ80(this.softStackTop());
     const prevDisks = this.devices?.disks;
     const prevCpm = this.devices?.cpm ?? null;
@@ -1063,6 +1070,7 @@ export class MachineRunner {
     this.pulse(this.phaseClk);
     this.pulse(this.dataClk);
     this.syncGatePortDevices();
+    if (++this.gatePhasesSinceBoot % GATE_PHASES_PER_INSTRUCTION === 0) this.onInstructionBoundary?.();
   }
 
   /**
