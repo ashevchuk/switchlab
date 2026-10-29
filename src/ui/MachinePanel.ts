@@ -1138,7 +1138,10 @@ JR spin</textarea>
 
     // TAP demos: prefer entry.model or 48K BASIC so LOAD "" works
     const wantModel = entry.model ?? '48';
-    this.runner!.ensureSpectrumSoft(wantModel);
+    // A Spectrum that is already running (an earlier demo or snapshot) is not at the BASIC prompt,
+    // so `LOAD ""` would be typed into that program: start the ROM again first.
+    const startedNow = this.runner!.ensureSpectrumSoft(wantModel);
+    if (!startedNow) this.runner!.reboot();
     const { blocks } = this.runner!.mountSpectrumTap(buf);
     saveSpectrumSession({ model: wantModel, demoId: entry.id });
     this.win.setTitle('TTY', `ZX Spectrum · ${entry.title}`);

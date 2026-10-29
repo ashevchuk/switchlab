@@ -76,6 +76,37 @@ test.describe('Spectrum audit — demos', () => {
   }
 });
 
+test.describe('Spectrum audit — demo after demo', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto(`file://${indexHtml}`);
+    await waitMenubar(page);
+  });
+
+  const tapePosition = (page: import('@playwright/test').Page) =>
+    page.evaluate(() => (document.querySelector('[data-act="tape-prog"]') as HTMLProgressElement | null)?.value ?? 0);
+
+  test('a TAP demo loads on top of a running snapshot demo', async ({ page }) => {
+    test.setTimeout(150_000);
+    await placeSpectrum48(page);
+    await loadBundledDemo(page, 'rainbow');
+    await expect.poll(() => spectrumScreenActive(page), { timeout: 20_000 }).toBe(true);
+    await loadBundledDemo(page, 'glazx');
+    // LOAD "" is only picked up at the BASIC prompt: the tape must advance past block 0.
+    await expect.poll(() => tapePosition(page), { timeout: 90_000 }).toBeGreaterThan(0);
+  });
+
+  test('a TAP demo loads on top of another TAP demo', async ({ page }) => {
+    test.setTimeout(200_000);
+    await placeSpectrum48(page);
+    await loadBundledDemo(page, 'glazx');
+    await expect.poll(() => tapePosition(page), { timeout: 90_000 }).toBeGreaterThan(0);
+    await loadBundledDemo(page, 'pzxl');
+    await expect.poll(() => panelLog(page), { timeout: 20_000 }).toContain('pZXl.tap');
+    // The new tape starts again from block 0 and has to move on.
+    await expect.poll(() => tapePosition(page), { timeout: 90_000 }).toBeGreaterThan(0);
+  });
+});
+
 test.describe('Spectrum audit — features', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(`file://${indexHtml}`);

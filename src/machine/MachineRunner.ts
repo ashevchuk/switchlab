@@ -418,7 +418,8 @@ export class MachineRunner {
   }
 
   /** Ensure Spectrum mode + ROM + soft CPU; does not clear RAM banks unless mode changes. */
-  ensureSpectrumSoft(model: SpectrumModel = '48'): void {
+  /** Returns true when a Spectrum was started from power-up here, false when one was already running. */
+  ensureSpectrumSoft(model: SpectrumModel = '48'): boolean {
     if (!this.ram || this.ram.bytes.length < 0x10000) {
       throw new Error('Spectrum needs 64K RAM (addrBits=16)');
     }
@@ -442,6 +443,7 @@ export class MachineRunner {
     } else if (!this.soft) {
       this.soft = createSoftZ80(this.softStackTop());
     }
+    return needNew;
   }
 
   /** Load a 48K or 128K .SNA snapshot and start soft Run. */
