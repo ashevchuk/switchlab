@@ -78,7 +78,7 @@ import { WatchList, consecutiveBusPins, type WatchBusGroup } from './ui/WatchLis
 import { IoMapViewer } from './ui/IoMapViewer.js';
 import { draw } from './ui/Renderer.js';
 import { makeSoftCanvasResolve } from './ui/softCanvasResolve.js';
-import { isOrientable, orientSelection } from './sim/orientation.js';
+import { chipBoxSize, isOrientable, orientSelection } from './sim/orientation.js';
 import {
   showContextMenu,
   hideContextMenu,
@@ -1147,6 +1147,24 @@ document.getElementById('fold')?.addEventListener('click', () => void foldSelect
 document.getElementById('unfold')?.addEventListener('click', () => void unfoldSelection());
 document.getElementById('find')?.addEventListener('click', () => void findInCircuit());
 document.getElementById('rename-net')?.addEventListener('click', () => void renameSelectedNet());
+function undoEdit(): void {
+  if (editHistory.undo(editor.circuit)) {
+    editor.clearSelection();
+    editor.cancelWire();
+    uiDirty = true;
+  }
+}
+
+function redoEdit(): void {
+  if (editHistory.redo(editor.circuit)) {
+    editor.clearSelection();
+    editor.cancelWire();
+    uiDirty = true;
+  }
+}
+
+document.getElementById('undo')?.addEventListener('click', undoEdit);
+document.getElementById('redo')?.addEventListener('click', redoEdit);
 document.getElementById('duplicate')?.addEventListener('click', () => {
   if (editor.duplicateSelection()) uiDirty = true;
 });
@@ -2452,8 +2470,7 @@ function exportSchematicSvg(): void {
         break;
       }
       case 'chip': {
-        const bw = chipBodyWidth(c);
-        const bh = chipBoxHeight(c);
+        const { w: bw, h: bh } = chipBoxSize(c);
         const label = c.marking || (library.has(c.defId) ? library.get(c.defId).name : 'chip');
         parts.push(
           `<rect x="${x - bw / 2}" y="${y - bh / 2}" width="${bw}" height="${bh}" rx="8" fill="#232a4a" stroke="#7d8496" stroke-width="1.5"/>`,
@@ -2926,6 +2943,17 @@ const NUDGE_KEYS: Record<string, [number, number]> = {
   ArrowRight: [GRID, 0],
 };
 
+/**
+ * The Latin letter a shortcut is bound to. `ev.key` is the character the layout produces, so on a
+ * Ukrainian or Russian layout Ctrl+Z reports "я" and no shortcut would match; there the physical
+ * key (`ev.code`) decides. A Latin `ev.key` always wins, so Dvorak and Colemak keep their labels.
+ */
+function shortcutKey(ev: KeyboardEvent): string {
+  if (/^[a-z]$/i.test(ev.key)) return ev.key.toLowerCase();
+  const physical = /^Key([A-Z])$/.exec(ev.code);
+  return physical ? physical[1]!.toLowerCase() : ev.key.toLowerCase();
+}
+
 window.addEventListener('keydown', (ev) => {
   // Cheat sheet / context menu close even when focus is in chrome.
   if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && ev.key === '?') {
@@ -2954,26 +2982,26 @@ window.addEventListener('keydown', (ev) => {
   if (ev.code === 'Space') spacePressed = true;
   const noModifiers = !ev.ctrlKey && !ev.metaKey && !ev.altKey;
 
-  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'g') {
+  if ((ev.ctrlKey || ev.metaKey) && shortcutKey(ev) === 'g') {
     ev.preventDefault();
     if (ev.shiftKey) void unfoldSelection();
     else void foldSelection();
-  } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'f') {
+  } else if ((ev.ctrlKey || ev.metaKey) && shortcutKey(ev) === 'f') {
     ev.preventDefault();
     void findInCircuit();
-  } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'w') {
+  } else if ((ev.ctrlKey || ev.metaKey) && shortcutKey(ev) === 'w') {
     ev.preventDefault();
     addWatchForHoveredOrSelected();
-  } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'r' && !ev.shiftKey) {
+  } else if ((ev.ctrlKey || ev.metaKey) && shortcutKey(ev) === 'r' && !ev.shiftKey) {
     ev.preventDefault();
     void renameSelectedNet();
-  } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'd') {
+  } else if ((ev.ctrlKey || ev.metaKey) && shortcutKey(ev) === 'd') {
     ev.preventDefault();
     if (editor.duplicateSelection()) uiDirty = true;
-  } else if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key.toLowerCase() === 'v') {
+  } else if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && shortcutKey(ev) === 'v') {
     ev.preventDefault();
     void stampSelectionPrompt();
-  } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'l') {
+  } else if ((ev.ctrlKey || ev.metaKey) && shortcutKey(ev) === 'l') {
     ev.preventDefault();
     const libMenu = document.querySelector<HTMLElement>('#menubar .menu[data-menu="library"]');
     if (libMenu) {
@@ -2982,30 +3010,22 @@ window.addEventListener('keydown', (ev) => {
       chipPaletteSearchEl?.focus();
       chipPaletteSearchEl?.select();
     }
-  } else if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key.toLowerCase() === 'e') {
+  } else if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && shortcutKey(ev) === 'e') {
     ev.preventDefault();
     void exportSelectionAsChip();
-  } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'z' && !ev.shiftKey) {
+  } else if ((ev.ctrlKey || ev.metaKey) && shortcutKey(ev) === 'z' && !ev.shiftKey) {
     ev.preventDefault();
-    if (editHistory.undo(editor.circuit)) {
-      editor.clearSelection();
-      editor.cancelWire();
-      uiDirty = true;
-    }
+    undoEdit();
   } else if (
     (ev.ctrlKey || ev.metaKey) &&
-    (ev.key.toLowerCase() === 'y' || (ev.shiftKey && ev.key.toLowerCase() === 'z'))
+    (shortcutKey(ev) === 'y' || (ev.shiftKey && shortcutKey(ev) === 'z'))
   ) {
     ev.preventDefault();
-    if (editHistory.redo(editor.circuit)) {
-      editor.clearSelection();
-      editor.cancelWire();
-      uiDirty = true;
-    }
-  } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'c') {
+    redoEdit();
+  } else if ((ev.ctrlKey || ev.metaKey) && shortcutKey(ev) === 'c') {
     ev.preventDefault();
     editor.copySelection();
-  } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'v' && !ev.shiftKey) {
+  } else if ((ev.ctrlKey || ev.metaKey) && shortcutKey(ev) === 'v' && !ev.shiftKey) {
     ev.preventDefault();
     if (editor.pasteClipboard()) uiDirty = true;
   } else if (ev.key === 'Delete' || ev.key === 'Backspace') {
@@ -3024,7 +3044,7 @@ window.addEventListener('keydown', (ev) => {
     }
   } else if (ev.key === '0') {
     camera.scale = 1;
-  } else if (ev.key.toLowerCase() === 'f') {
+  } else if (shortcutKey(ev) === 'f') {
     camera.fit(circuitBounds(editor.circuit), vw(), vh());
   } else if (ev.altKey && !ev.ctrlKey && !ev.metaKey && NUDGE_KEYS[ev.key] && editor.selectedIds.size >= 2) {
     ev.preventDefault();
@@ -3048,24 +3068,24 @@ window.addEventListener('keydown', (ev) => {
     const [dx, dy] = NUDGE_KEYS[ev.key]!;
     for (const id of editor.selectedIds) editor.circuit.moveComponent(id, dx, dy);
     editor.tidySelectedWires(false);
-  } else if (noModifiers && ev.key.toLowerCase() === 'h') {
+  } else if (noModifiers && shortcutKey(ev) === 'h') {
     editor.highlightSelectionNet();
     uiDirty = true;
-  } else if (noModifiers && ev.key.toLowerCase() === 't') {
+  } else if (noModifiers && shortcutKey(ev) === 't') {
     if (editor.tidySelectedWires() > 0) uiDirty = true;
-  } else if (noModifiers && ev.key.toLowerCase() === 'g') {
+  } else if (noModifiers && shortcutKey(ev) === 'g') {
     ev.preventDefault();
     editor.cycleSnapMode();
     updateSnapHint();
     uiDirty = true;
-  } else if (noModifiers && (ev.key === 'r' || ev.key === 'R')) {
+  } else if (noModifiers && shortcutKey(ev) === 'r') {
     if (orientSelected(ev.shiftKey ? 'ccw' : 'cw')) {
       ev.preventDefault();
       uiDirty = true;
       syncInspector();
       objectInspector.refresh();
     }
-  } else if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && ev.key.toLowerCase() === 'm') {
+  } else if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && shortcutKey(ev) === 'm') {
     if (orientSelected(ev.shiftKey ? 'flipV' : 'flipH')) {
       ev.preventDefault();
       uiDirty = true;
@@ -3075,11 +3095,11 @@ window.addEventListener('keydown', (ev) => {
   } else if (noModifiers && ev.key === '=') {
     minimap.setVisible(minimap.root.hidden);
     uiDirty = true;
-  } else if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && ev.shiftKey && ev.key.toLowerCase() === 'o') {
+  } else if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && ev.shiftKey && shortcutKey(ev) === 'o') {
     ev.preventDefault();
     setTool({ kind: 'port', promptName: true });
-  } else if (noModifiers && TOOL_KEYS.has(ev.key.toLowerCase())) {
-    setTool(TOOL_KEYS.get(ev.key.toLowerCase())!);
+  } else if (noModifiers && TOOL_KEYS.has(shortcutKey(ev))) {
+    setTool(TOOL_KEYS.get(shortcutKey(ev))!);
   }
 });
 window.addEventListener('keyup', (ev) => {
