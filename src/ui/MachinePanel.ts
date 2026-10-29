@@ -50,10 +50,10 @@ const BMP_GAP = 6;
 const MAX_PENDING_KEYS = 16;
 /**
  * After a key is read, the next waits this many gate instructions: the monitor clears the
- * key status itself a few instructions after reading the data and would erase a key posted
+ * key status itself four instructions after reading the data and would erase a key posted
  * in between.
  */
-const KEY_GAP_INSTRUCTIONS = 40;
+const KEY_GAP_INSTRUCTIONS = 12;
 const SPEC_SCALE = 2;
 
 /**
