@@ -8,14 +8,19 @@
  *   npm run bench:solver -- --check           compare behaviour against the golden file
  *
  * Timings depend on the machine; the digests (`chain`, `finalDigest`, `trace`)
- * do not, so a replacement solver is compared on those.
+ * do not. Golden digests are kept per engine (SOLVER_ENGINE): `jacobi` is the
+ * original solver, `ordered` the default, and the two differ on nets whose value
+ * depends on evaluation order.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getSolverEngine } from '../src/sim/solver.js';
 import { SCENARIOS, behaviourOf, runScenario, type BenchResult } from './lib/solverBench.js';
 
 const GOLDEN_PATH = join(dirname(fileURLToPath(import.meta.url)), 'solver-golden.json');
+type Golden = Record<string, Record<string, ReturnType<typeof behaviourOf>>>;
+const engineName = getSolverEngine();
 
 function argValue(name: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -47,14 +52,16 @@ const outPath = argValue('--out');
 if (outPath) writeFileSync(outPath, JSON.stringify(results, null, 2) + '\n');
 
 if (flag('--write-golden')) {
-  const golden: Record<string, ReturnType<typeof behaviourOf>> = existsSync(GOLDEN_PATH) ? JSON.parse(readFileSync(GOLDEN_PATH, 'utf8')) : {};
-  for (const r of results) golden[r.scenario] = behaviourOf(r);
+  const golden: Golden = existsSync(GOLDEN_PATH) ? JSON.parse(readFileSync(GOLDEN_PATH, 'utf8')) : {};
+  golden[engineName] ??= {};
+  for (const r of results) golden[engineName]![r.scenario] = behaviourOf(r);
   writeFileSync(GOLDEN_PATH, JSON.stringify(golden, null, 2) + '\n');
   console.log(`\nwrote ${GOLDEN_PATH}`);
 }
 
 if (flag('--check')) {
-  const golden: Record<string, ReturnType<typeof behaviourOf>> = JSON.parse(readFileSync(GOLDEN_PATH, 'utf8'));
+  const golden = (JSON.parse(readFileSync(GOLDEN_PATH, 'utf8')) as Golden)[engineName] ?? {};
+  console.log(`\nchecking against the ${engineName} golden digests`);
   let failed = false;
   for (const r of results) {
     const want = golden[r.scenario];

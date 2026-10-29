@@ -9,7 +9,7 @@ import {
   tickSoftLabPor,
 } from './softLab.js';
 import type { SoftLabState } from './softLab.js';
-import { adoptLevelOf, eventRelax } from './eventSolver.js';
+import { adoptLevelOf, orderedRelax } from './orderedSolver.js';
 import type {
   ChipInstanceComponent,
   Level,
@@ -308,24 +308,20 @@ export interface Relaxed {
   levelAt: (netIdx: number) => Level;
 }
 
-export type SolverEngine = 'jacobi' | 'event' | 'shadow' | 'ordered' | 'shadow-ordered';
+export type SolverEngine = 'jacobi' | 'ordered' | 'shadow-ordered';
 
 let engine: SolverEngine = 'ordered';
 if (typeof process !== 'undefined') {
   const requested = process.env.SOLVER_ENGINE;
-  if (
-    requested === 'jacobi' ||
-    requested === 'event' ||
-    requested === 'shadow' ||
-    requested === 'ordered' ||
-    requested === 'shadow-ordered'
-  ) {
-    engine = requested;
-  }
+  if (requested === 'jacobi' || requested === 'ordered' || requested === 'shadow-ordered') engine = requested;
 }
 
 export function setSolverEngine(next: SolverEngine): void {
   engine = next;
+}
+
+export function getSolverEngine(): SolverEngine {
+  return engine;
 }
 
 export function step(
@@ -343,14 +339,8 @@ function relax(cache: StepStructureCache, netMap: NetMap, prev: SimState, maxIte
   if (engine === 'jacobi' || softLabPorActive()) {
     return jacobiRelax(cache, netMap, prev, maxIterations);
   }
-  if (engine === 'event') return eventRelax(cache, prev.levelOf, maxIterations);
-  if (engine === 'ordered') return eventRelax(cache, prev.levelOf, maxIterations, true);
   if (engine === 'shadow-ordered') return shadowOrderedRelax(cache, prev, netMap, maxIterations);
-  const fast = eventRelax(cache, prev.levelOf, maxIterations);
-  const dense = jacobiRelax(cache, netMap, prev, maxIterations);
-  assertSameRelaxation(cache, fast, dense);
-  adoptLevelOf(cache, dense.levelOf);
-  return dense;
+  return orderedRelax(cache, prev.levelOf, maxIterations);
 }
 
 /** Ticks the ordered engine was checked against, and ticks the dense reference could not settle. */
@@ -363,16 +353,16 @@ const SHADOW_SETTLE_LIMIT = 4096;
  * enough to settle, and a tick the reference cannot settle is not compared.
  */
 function shadowOrderedRelax(cache: StepStructureCache, prev: SimState, netMap: NetMap, maxIterations: number): Relaxed {
-  const fast = eventRelax(cache, prev.levelOf, maxIterations, true);
+  const fast = orderedRelax(cache, prev.levelOf, maxIterations);
   const dense = jacobiRelax(cache, netMap, prev, SHADOW_SETTLE_LIMIT);
   if (!dense.settled) {
     shadowOrderedStats.skipped++;
-    adoptLevelOf(cache, null, true);
+    adoptLevelOf(cache, null);
     return dense;
   }
   shadowOrderedStats.compared++;
-  assertSameRelaxation(cache, fast, dense, false);
-  adoptLevelOf(cache, dense.levelOf, true);
+  assertSameRelaxation(cache, fast, dense);
+  adoptLevelOf(cache, dense.levelOf);
   return dense;
 }
 
@@ -444,20 +434,18 @@ function explainedByFloatingNodes(cache: StepStructureCache, dense: Relaxed, dif
   return explained;
 }
 
-function assertSameRelaxation(cache: StepStructureCache, fast: Relaxed, dense: Relaxed, compareIterations = true): void {
+function assertSameRelaxation(cache: StepStructureCache, fast: Relaxed, dense: Relaxed): void {
   const problems: string[] = [];
-  if (compareIterations && fast.iterations !== dense.iterations) problems.push(`iterations ${fast.iterations} != ${dense.iterations}`);
   if (fast.settled !== dense.settled) problems.push(`settled ${fast.settled} != ${dense.settled}`);
   // A floating node keeps whatever charge the transients left it, which depends on evaluation order.
   // The ordered engine may leave such a node (and what it feeds) undefined where the dense one kept 0/1.
-  const settledMode = !compareIterations;
   const differing = new Set<number>();
   for (let i = 0; i < cache.netIds.length; i++) {
     if (fast.levelAt(i) !== dense.levelAt(i) || fast.levelOf.get(cache.netIds[i]!) !== dense.levelOf.get(cache.netIds[i]!)) {
       differing.add(i);
     }
   }
-  const explained = settledMode && differing.size > 0 ? explainedByFloatingNodes(cache, dense, differing) : new Set<number>();
+  const explained = differing.size > 0 ? explainedByFloatingNodes(cache, dense, differing) : new Set<number>();
   let levelMismatches = 0;
   let firstMismatch = -1;
   for (const i of differing) {
@@ -470,7 +458,7 @@ function assertSameRelaxation(cache: StepStructureCache, fast: Relaxed, dense: R
     }
     if (firstMismatch < 0) firstMismatch = i;
     if (levelMismatches++ < MISMATCH_REPORT_LIMIT) {
-      problems.push(`net ${netId}: event ${f} (map ${fast.levelOf.get(netId)}), dense ${d}   [neighbours print dense/event]`);
+      problems.push(`net ${netId}: ordered ${f} (map ${fast.levelOf.get(netId)}), dense ${d}   [neighbours print dense/ordered]`);
     }
   }
   if (levelMismatches > MISMATCH_REPORT_LIMIT) problems.push(`... ${levelMismatches} nets differ in total`);
@@ -520,9 +508,9 @@ function assertSameRelaxation(cache: StepStructureCache, fast: Relaxed, dense: R
   };
   const onlyFast = [...fast.contended].filter((id) => !dense.contended.has(id) && sameLevel(id));
   const onlyDense = [...dense.contended].filter((id) => !fast.contended.has(id) && sameLevel(id));
-  if (onlyFast.length > 0) problems.push(`contended only in event: ${onlyFast.slice(0, MISMATCH_REPORT_LIMIT).join(', ')}`);
+  if (onlyFast.length > 0) problems.push(`contended only in ordered: ${onlyFast.slice(0, MISMATCH_REPORT_LIMIT).join(', ')}`);
   if (onlyDense.length > 0) problems.push(`contended only in dense: ${onlyDense.slice(0, MISMATCH_REPORT_LIMIT).join(', ')}`);
-  if (problems.length > 0) throw new Error(`Event solver diverged from the dense solver:\n${problems.join('\n')}`);
+  if (problems.length > 0) throw new Error(`Ordered solver diverged from the dense solver:\n${problems.join('\n')}`);
 }
 
 /** RAM writes, key-clear on read, Soft Lab edge commits and the POR counter: exactly once per tick. */

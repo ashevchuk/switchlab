@@ -13,10 +13,10 @@ function tick(circuit: Circuit, library: ChipLibrary, state: SimState): { state:
 }
 
 describe('event solver level snapshot', () => {
-  afterEach(() => setSolverEngine('event'));
+  afterEach(() => setSolverEngine('ordered'));
 
   it('is a read-only Map that keeps each tick as it was', () => {
-    setSolverEngine('event');
+    setSolverEngine('ordered');
     const library = new ChipLibrary();
     const circuit = new Circuit();
     const input = makeInput(circuit, 1);
@@ -44,7 +44,7 @@ describe('event solver level snapshot', () => {
 
     setSolverEngine('jacobi');
     const dense = tick(circuit, library, initialState()).state.levelOf;
-    setSolverEngine('event');
+    setSolverEngine('ordered');
     const view = tick(circuit, library, initialState()).state.levelOf;
 
     expect(new Map(view)).toEqual(new Map(dense));

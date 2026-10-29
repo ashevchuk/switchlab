@@ -3,35 +3,38 @@ import type { SoftLabState } from './softLab.js';
 import type { Level } from './types.js';
 
 /**
- * Event-driven version of the relaxation in solver.ts.
+ * The ordered solver engine.
  *
- * It is the same synchronous (Jacobi) iteration, but each pass only evaluates
- * the groups whose inputs changed in the pass before. Starting from the same
- * levels it must reach the same levels in the same number of passes, the same
- * `settled` flag and the same `contended` set as the dense solver; shadow mode
- * checks that on every tick.
+ * A tick evaluates only the groups whose inputs changed, in an order that follows
+ * the gate dependency graph. The static channel-connected groups of nets are the
+ * nodes (plus one node per RAM/ROM/Soft Lab device and one for supply hubs); an
+ * edge runs from the group of a transistor's gate net to the group of its channel.
+ * The graph has real loops (registers), so groups are ranked by a depth-first
+ * reverse postorder: on the acyclic part a group is evaluated once per tick, after
+ * the groups that drive its gates, and an edge that points backwards just makes the
+ * later group evaluate again. A priority queue of dirty groups drives the tick and
+ * each group commits in place.
  *
- * The dense solver merges nets through every conducting transistor, supplies
- * included. A supply net with thousands of pull-ups would make every pass walk
- * one huge group, so nets with a constant driver and a large fan-out are "hubs":
- * a local component is built by walking conducting channels but never through a
- * hub, and a component that touches hubs is tied to them. Each hub keeps counts
- * of the forced values its tied nets contribute. Hubs joined by a conducting path
- * form one class, and a class forced both ways makes every net tied to it `Z`,
- * exactly as the single merged group does in the dense solver.
+ * Inside a group the local components are built by walking conducting channels.
+ * Nets with a constant driver and a large fan-out (the supplies) are "hubs": the
+ * walk never passes through one, and a component that touches hubs is tied to
+ * them. A hub forces only what its own drivers force, so a group tied to both
+ * levels, or driven both ways, reads `Z` and is flagged `contended` on its own.
  *
- * Not handled here (the caller falls back to the dense solver): Soft to Gates
- * POR overrides.
+ * A group may be evaluated `maxEvaluations` times per tick; one that needs more
+ * keeps its pending work for the next tick and the tick is reported unsettled.
+ *
+ * Not handled here (the caller uses the dense solver): Soft to Gates POR overrides.
  */
 
-export interface EventTransistor {
+export interface SolverTransistor {
   isN: boolean;
   gate: number;
   drain: number;
   source: number;
 }
 
-export interface EventRam {
+export interface SolverRam {
   oe: number;
   /** -1 for ROM. */
   we: number;
@@ -40,24 +43,24 @@ export interface EventRam {
   mem: { bytes: Uint8Array };
 }
 
-export interface EventSoftChip {
+export interface SolverSoftChip {
   model: string;
   state: SoftLabState;
   pinNet: Record<string, number | undefined>;
   pinNames: string[];
 }
 
-export interface EventStructure {
+export interface SolverStructure {
   netIds: string[];
   indexOf: Map<string, number>;
-  transistors: EventTransistor[];
-  ramIdx: EventRam[];
-  softChips: EventSoftChip[];
+  transistors: SolverTransistor[];
+  ramIdx: SolverRam[];
+  softChips: SolverSoftChip[];
   /** `fixed` drivers (Sources) keep their value for the life of the structure. */
   driverPins: { netIdx: number; comp: { value: 0 | 1 }; fixed?: boolean }[];
 }
 
-export interface EventRelaxed {
+export interface SolverRelaxed {
   levelOf: Map<string, Level>;
   contended: Set<string>;
   settled: boolean;
@@ -152,7 +155,6 @@ class Engine {
   /** Nets named VCC or GND are driven even when no source is wired to them. */
   private readonly implicitRails: number[] = [];
   private readonly hubOf: Int8Array;
-  private readonly tHubMask: Int32Array;
   private readonly tIsN: Uint8Array;
   private readonly tGate: Int32Array;
   private readonly tDrain: Int32Array;
@@ -161,7 +163,6 @@ class Engine {
   private readonly gatedList: Int32Array;
   private readonly chanStart: Int32Array;
   private readonly chanList: Int32Array;
-  private readonly hubShorts: Int32Array;
 
   private readonly cur: Uint8Array;
   private readonly conducts: Uint8Array;
@@ -177,16 +178,15 @@ class Engine {
   private readonly deviceInputStart: Int32Array;
   private readonly deviceInputList: Int32Array;
   private readonly deviceDirty: Uint8Array;
-  private dirtyDevices: number[] = [];
   private readonly deviceNets: number[][] = [];
   private readonly deviceBits: number[][] = [];
   /** Drivers that can change between ticks, and the nets they sit on. */
-  private readonly liveDrivers: EventStructure['driverPins'];
+  private readonly liveDrivers: SolverStructure['driverPins'];
   private readonly liveDrivenNets: Int32Array;
   /** What the fixed drivers and the implicit VCC/GND nets force, by net. */
   private readonly fixedDrv: Uint8Array;
 
-  // Hub bookkeeping: which nets are tied to each hub, and what they force on it.
+  // Hub bookkeeping: which nets are tied to each hub, and what the hub's own drivers force.
   private readonly att: Int32Array;
   private readonly contrib: Uint8Array;
   private readonly cnt0: Int32Array;
@@ -194,20 +194,13 @@ class Engine {
   private readonly list: Int32Array[] = [];
   private readonly pos: Int32Array;
   private readonly len: Int32Array;
-  /** Reference counts of the hub sets that some net or conducting channel joins (two or more hubs). */
-  private readonly links = new Map<number, number>();
-  private linksDirty = true;
-  private readonly hubClass: Int8Array;
-  private readonly classBits: Uint8Array;
-  private readonly hubValue: Uint8Array;
-  private readonly hubContended: Uint8Array;
+  private readonly hubForced: Uint8Array;
   private readonly lastValue: Uint8Array;
   private readonly lastContended: Uint8Array;
 
   private readonly contFlag: Uint8Array;
   private readonly contSet = new Set<number>();
 
-  private pending: number[] = [];
   private readonly visit: Int32Array;
   private stamp = 0;
   private readonly chgStamp: Int32Array;
@@ -220,14 +213,9 @@ class Engine {
   private readonly flips: Uint8Array;
   private readonly gaveUp: Uint8Array;
   private readonly histTick: Int32Array;
-  /** Pass of the last history entry, so passes that skipped a floating net can be replayed. */
-  private readonly lastPass: Int32Array;
-  /** 1 while the net's group is held by capacitance (the dense solver records history for it on every pass). */
-  private readonly floating: Uint8Array;
-  private passNo = 0;
   private tickNo = 0;
 
-  // Ordered mode: nodes are the static channel-connected groups, then the devices, then one node for hubs.
+  // Scheduling: nodes are the static channel-connected groups, then the devices, then one node for hubs.
   private cccOf!: Int32Array;
   private cccCount = 0;
   private hubNode = 0;
@@ -245,10 +233,7 @@ class Engine {
 
   lastLevelOf: Map<string, Level> | null = null;
 
-  constructor(
-    private readonly s: EventStructure,
-    private readonly ordered = false,
-  ) {
+  constructor(private readonly s: SolverStructure) {
     const n = s.netIds.length;
     this.n = n;
     const T = s.transistors.length;
@@ -306,26 +291,12 @@ class Engine {
     this.hubOf = new Int8Array(n).fill(-1);
     this.hubNets.forEach((net, h) => (this.hubOf[net] = h));
     const K = this.hubNets.length;
-    this.tHubMask = new Int32Array(T);
-    const shorts: number[] = [];
-    for (let t = 0; t < T; t++) {
-      const ha = this.hubOf[this.tDrain[t]!]!;
-      const hb = this.hubOf[this.tSource[t]!]!;
-      if (ha >= 0 && hb >= 0 && ha !== hb) {
-        this.tHubMask[t] = (1 << ha) | (1 << hb);
-        shorts.push(t);
-      }
-    }
-    this.hubShorts = Int32Array.from(shorts);
     this.cnt0 = new Int32Array(K);
     this.cnt1 = new Int32Array(K);
     for (let h = 0; h < K; h++) this.list.push(new Int32Array(n));
     this.pos = new Int32Array(K * n).fill(-1);
     this.len = new Int32Array(K);
-    this.hubClass = new Int8Array(K);
-    this.classBits = new Uint8Array(K);
-    this.hubValue = new Uint8Array(K);
-    this.hubContended = new Uint8Array(K);
+    this.hubForced = new Uint8Array(K);
     this.lastValue = new Uint8Array(K).fill(NO_VALUE);
     this.lastContended = new Uint8Array(K);
 
@@ -375,9 +346,7 @@ class Engine {
     this.flips = new Uint8Array(n);
     this.gaveUp = new Uint8Array(n);
     this.histTick = new Int32Array(n);
-    this.lastPass = new Int32Array(n);
-    this.floating = new Uint8Array(n);
-    if (ordered) this.buildOrder();
+    this.buildOrder();
   }
 
   /** Throw away all incremental state and start from `prevLevelOf`, evaluating every net. */
@@ -402,22 +371,15 @@ class Engine {
     this.len.fill(0);
     this.lastValue.fill(NO_VALUE);
     this.lastContended.fill(0);
-    this.floating.fill(0);
     this.contFlag.fill(0);
     this.contSet.clear();
-    this.links.clear();
-    this.linksDirty = true;
-    if (!this.ordered) for (const t of this.hubShorts) if (this.conducts[t]) this.linkAdd(this.tHubMask[t]!);
-    this.pending = [];
-    for (let i = 0; i < n; i++) this.pending.push(i);
-    if (this.ordered) {
-      this.heapSize = 0;
-      this.queued.fill(0);
-      this.seedHead.fill(-1);
-      this.seedFlag.fill(0);
-      this.deferred.length = 0;
-      this.deferredFlag.fill(0);
-    }
+    this.heapSize = 0;
+    this.queued.fill(0);
+    this.seedHead.fill(-1);
+    this.seedFlag.fill(0);
+    this.deferred.length = 0;
+    this.deferredFlag.fill(0);
+    for (let i = 0; i < n; i++) this.pushSeed(i);
   }
 
   private conductsNow(t: number): number {
@@ -432,18 +394,16 @@ class Engine {
     for (const net of liveDrivenNets) {
       if (drvNew[net] !== drv[net]) {
         drv[net] = drvNew[net]!;
-        this.pending.push(net);
+        this.pushSeed(net);
       }
     }
   }
 
   /** Memory contents and Soft Lab state change between ticks, so every device is read again at the start of a tick. */
   private markAllDevicesDirty(): void {
-    this.dirtyDevices = [];
     for (let d = 0; d < this.deviceCount; d++) {
       this.deviceDirty[d] = 1;
-      if (this.ordered) this.enqueue(this.cccCount + d);
-      else this.dirtyDevices.push(d);
+      this.enqueue(this.cccCount + d);
     }
   }
 
@@ -452,39 +412,33 @@ class Engine {
       const device = this.deviceInputList[k]!;
       if (this.deviceDirty[device]) continue;
       this.deviceDirty[device] = 1;
-      if (this.ordered) this.enqueue(this.cccCount + device);
-      else this.dirtyDevices.push(device);
+      this.enqueue(this.cccCount + device);
     }
   }
 
-  /** RAM/ROM read forces and Soft Lab chip outputs, re-read only for devices whose inputs changed. */
-  private refreshExternal(work: number[]): void {
-    const dirty = this.dirtyDevices;
-    this.dirtyDevices = [];
-    if (dirty.length === 0) return;
-    const touched: number[] = [];
+  /** Re-read one RAM/ROM or Soft Lab chip and seed the nets whose forced value changed. */
+  private refreshDevice(device: number): void {
+    this.deviceDirty[device] = 0;
     this.externalStamp++;
+    const touched: number[] = [];
+    const nets = this.deviceNets[device]!;
+    const bits = this.deviceBits[device]!;
+    for (let i = 0; i < nets.length; i++) this.changeExternal(nets[i]!, bits[i]!, -1, touched);
+    nets.length = 0;
+    bits.length = 0;
+    const emit = (net: number, bit: 0 | 1): void => {
+      nets.push(net);
+      bits.push(bit);
+      this.changeExternal(net, bit, 1, touched);
+    };
     const ramCount = this.s.ramIdx.length;
-    for (const device of dirty) {
-      this.deviceDirty[device] = 0;
-      const nets = this.deviceNets[device]!;
-      const bits = this.deviceBits[device]!;
-      for (let i = 0; i < nets.length; i++) this.changeExternal(nets[i]!, bits[i]!, -1, touched);
-      nets.length = 0;
-      bits.length = 0;
-      const emit = (net: number, bit: 0 | 1): void => {
-        nets.push(net);
-        bits.push(bit);
-        this.changeExternal(net, bit, 1, touched);
-      };
-      if (device < ramCount) this.readMemory(this.s.ramIdx[device]!, emit);
-      else this.driveSoftChip(this.s.softChips[device - ramCount]!, emit);
-    }
+    if (device < ramCount) this.readMemory(this.s.ramIdx[device]!, emit);
+    else this.driveSoftChip(this.s.softChips[device - ramCount]!, emit);
     for (const net of touched) {
       const forced = (this.extCount0[net]! > 0 ? 1 : 0) | (this.extCount1[net]! > 0 ? 2 : 0);
       if (forced === this.ext[net]) continue;
       this.ext[net] = forced;
-      work.push(net);
+      this.pushSeed(net);
     }
   }
 
@@ -496,7 +450,7 @@ class Engine {
     touched.push(net);
   }
 
-  private readMemory(r: EventRam, emit: (net: number, bit: 0 | 1) => void): void {
+  private readMemory(r: SolverRam, emit: (net: number, bit: 0 | 1) => void): void {
     const { cur } = this;
     if (cur[r.oe] !== ONE) return;
     if (r.we >= 0 && cur[r.we] === ONE) return;
@@ -510,7 +464,7 @@ class Engine {
     for (let i = 0; i < r.data.length; i++) emit(r.data[i]!, ((byte >> i) & 1) as 0 | 1);
   }
 
-  private driveSoftChip(sc: EventSoftChip, emit: (net: number, bit: 0 | 1) => void): void {
+  private driveSoftChip(sc: SolverSoftChip, emit: (net: number, bit: 0 | 1) => void): void {
     const pinLevels: Record<string, Level> = {};
     for (const name of sc.pinNames) {
       const idx = sc.pinNet[name];
@@ -534,71 +488,21 @@ class Engine {
     this.pos[base + net] = -1;
   }
 
-  private linkAdd(mask: number): void {
-    this.links.set(mask, (this.links.get(mask) ?? 0) + 1);
-    this.linksDirty = true;
-  }
-
-  private linkRemove(mask: number): void {
-    const left = this.links.get(mask)! - 1;
-    if (left === 0) this.links.delete(mask);
-    else this.links.set(mask, left);
-    this.linksDirty = true;
-  }
-
-  /** Re-derive what `net` contributes to the hubs it is tied to. */
+  /** Re-derive which hubs `net` is tied to; a hub net also keeps its own forcing up to date. */
   private retie(net: number, newAtt: number): number {
     const oldAtt = this.att[net]!;
     const newBits = this.drv[net]! | this.ext[net]!;
-    const oldBits = this.contrib[net]!;
-    if (oldAtt !== 0 || newAtt !== 0) {
-      // Ordered mode: a short only blanks the group that has it, so nets tied to a hub
-      // never add to the hub's own forcing; only the hub net's own drivers do.
-      const feedsHub = !this.ordered || this.hubOf[net]! >= 0;
-      for (let m = oldAtt; m !== 0; m &= m - 1) {
-        const h = 31 - Math.clz32(m & -m);
-        if (feedsHub) {
-          this.cnt0[h]! -= oldBits & 1;
-          this.cnt1[h]! -= (oldBits >> 1) & 1;
-        }
-        if (!((newAtt >> h) & 1)) this.removeFromList(h, net);
-      }
-      for (let m = newAtt; m !== 0; m &= m - 1) {
-        const h = 31 - Math.clz32(m & -m);
-        if (feedsHub) {
-          this.cnt0[h]! += newBits & 1;
-          this.cnt1[h]! += (newBits >> 1) & 1;
-        }
-        if (!((oldAtt >> h) & 1)) this.addToList(h, net);
-      }
-      if (oldAtt !== newAtt && !this.ordered) {
-        if ((oldAtt & (oldAtt - 1)) !== 0) this.linkRemove(oldAtt);
-        if ((newAtt & (newAtt - 1)) !== 0) this.linkAdd(newAtt);
-      }
+    const hub = this.hubOf[net]!;
+    if (hub >= 0) {
+      const oldBits = this.contrib[net]!;
+      this.cnt0[hub]! += (newBits & 1) - (oldBits & 1);
+      this.cnt1[hub]! += ((newBits >> 1) & 1) - ((oldBits >> 1) & 1);
     }
+    for (let m = oldAtt & ~newAtt; m !== 0; m &= m - 1) this.removeFromList(31 - Math.clz32(m & -m), net);
+    for (let m = newAtt & ~oldAtt; m !== 0; m &= m - 1) this.addToList(31 - Math.clz32(m & -m), net);
     this.att[net] = newAtt;
     this.contrib[net] = newBits;
     return newBits;
-  }
-
-  /** Join the hubs that a conducting path connects into classes. */
-  private recomputeClasses(): void {
-    const { hubClass } = this;
-    for (let h = 0; h < hubClass.length; h++) hubClass[h] = h;
-    const root = (h: number): number => {
-      while (hubClass[h] !== h) h = hubClass[h]!;
-      return h;
-    };
-    for (const mask of this.links.keys()) {
-      const first = 31 - Math.clz32(mask & -mask);
-      for (let m = mask & (mask - 1); m !== 0; m &= m - 1) {
-        const a = root(first);
-        const b = root(31 - Math.clz32(m & -m));
-        if (a !== b) hubClass[a] = b;
-      }
-    }
-    for (let h = 0; h < hubClass.length; h++) hubClass[h] = root(h);
-    this.linksDirty = false;
   }
 
   private setContended(net: number, flag: boolean): void {
@@ -620,22 +524,6 @@ class Engine {
       this.changed.push(net);
     }
     this.nxt[net] = value;
-  }
-
-  private addSeed(net: number): void {
-    if (this.hubOf[net]! >= 0) return;
-    if (this.ordered) this.pushSeed(net);
-    else this.pending.push(net);
-  }
-
-  /** One synchronous pass over the dirty groups. Returns true if any net changed. */
-  private pass(): boolean {
-    const work = this.pending;
-    this.pending = [];
-    this.passNo++;
-    this.refreshExternal(work);
-    this.evaluate(work);
-    return this.commit();
   }
 
   /** Rebuild the local components around `work`, re-tie them to the hubs and compute their next values. */
@@ -681,30 +569,25 @@ class Engine {
       compAtt.push(tied);
     }
 
-    // Phase B: values from the hub classes, forced drivers or a hold vote.
-    if (this.linksDirty) this.recomputeClasses();
-    const { hubClass, classBits, hubValue, hubContended, lastValue, lastContended } = this;
-    const hubCount = hubClass.length;
-    classBits.fill(0);
-    for (let h = 0; h < hubCount; h++) {
-      classBits[hubClass[h]!]! |= (this.cnt0[h]! > 0 ? 1 : 0) | (this.cnt1[h]! > 0 ? 2 : 0);
-    }
-    for (let h = 0; h < hubCount; h++) {
-      const forced = classBits[hubClass[h]!]!;
-      hubValue[h] = forcedLevel(forced);
-      hubContended[h] = forced === 3 ? 1 : 0;
-      if (hubValue[h] === lastValue[h] && hubContended[h] === lastContended[h]) continue;
-      lastValue[h] = hubValue[h]!;
-      lastContended[h] = hubContended[h]!;
+    // Phase B: a hub's own value, then each component from its hubs, its forced drivers or a hold vote.
+    const { hubForced, lastValue, lastContended } = this;
+    for (let h = 0; h < hubForced.length; h++) {
+      const forced = (this.cnt0[h]! > 0 ? 1 : 0) | (this.cnt1[h]! > 0 ? 2 : 0);
+      hubForced[h] = forced;
+      const value = forcedLevel(forced);
+      const contended = forced === 3 ? 1 : 0;
+      if (value === lastValue[h] && contended === lastContended[h]) continue;
+      lastValue[h] = value;
+      lastContended[h] = contended;
       const list = this.list[h]!;
       for (let i = 0; i < this.len[h]!; i++) {
         const net = list[i]!;
-        if (this.ordered && this.hubOf[net]! < 0) {
+        if (hubOf[net]! < 0) {
           this.addSeed(net);
-          continue;
+        } else {
+          this.setNext(net, value);
+          this.setContended(net, contended === 1);
         }
-        this.setNext(net, hubValue[h]!);
-        this.setContended(net, hubContended[h] === 1);
       }
     }
 
@@ -712,26 +595,11 @@ class Engine {
     for (let c = 0; c < compEnd.length; c++) {
       const end = compEnd[c]!;
       const tied = compAtt[c]!;
-      const forced = compForced[c]!;
-      if (tied !== 0 && this.ordered) {
-        let forcedHere = forced;
-        for (let m = tied; m !== 0; m &= m - 1) forcedHere |= classBits[31 - Math.clz32(m & -m)]!;
-        const value = forcedLevel(forcedHere);
-        for (let q = begin; q < end; q++) {
-          this.setNext(members[q]!, value);
-          this.setContended(members[q]!, forcedHere === 3);
-        }
-      } else if (tied !== 0) {
-        const h = 31 - Math.clz32(tied & -tied);
-        for (let q = begin; q < end; q++) {
-          this.leaveFloating(members[q]!);
-          this.setNext(members[q]!, hubValue[h]!);
-          this.setContended(members[q]!, hubContended[h] === 1);
-        }
-      } else if (forced !== 0) {
+      let forced = compForced[c]!;
+      for (let m = tied; m !== 0; m &= m - 1) forced |= hubForced[31 - Math.clz32(m & -m)]!;
+      if (forced !== 0) {
         const value = forcedLevel(forced);
         for (let q = begin; q < end; q++) {
-          this.leaveFloating(members[q]!);
           this.setNext(members[q]!, value);
           this.setContended(members[q]!, forced === 3);
         }
@@ -740,11 +608,10 @@ class Engine {
       }
       begin = end;
     }
-
   }
 
-  /** Make the computed values current, then find what the new levels disturb. Returns whether any net changed. */
-  private commit(): boolean {
+  /** Make the computed values current, then find what the new levels disturb. */
+  private commit(): void {
     const { cur, conducts, tDrain, tSource, nxt, changed } = this;
     for (const net of changed) cur[net] = nxt[net]!;
     for (const net of changed) {
@@ -755,26 +622,20 @@ class Engine {
         const nowConducts = this.conductsNow(t);
         if (nowConducts === conducts[t]) continue;
         conducts[t] = nowConducts;
-        const hubMask = this.ordered ? 0 : this.tHubMask[t]!;
-        if (hubMask !== 0) {
-          if (nowConducts) this.linkAdd(hubMask);
-          else this.linkRemove(hubMask);
-        }
         this.addSeed(tDrain[t]!);
         this.addSeed(tSource[t]!);
       }
     }
-    return changed.length > 0;
   }
 
   /** A component with no forced driver keeps the majority of its members' remembered levels. */
   private holdVote(members: number[], begin: number, end: number): void {
-    const { cur, gaveUp, floating, lastPass } = this;
+    const { cur, gaveUp, histTick } = this;
     let count0 = 0;
     let count1 = 0;
     for (let q = begin; q < end; q++) {
       const x = members[q]!;
-      this.replaySkippedPasses(x);
+      if (histTick[x] !== this.tickNo) this.resetHistory(x);
       if (gaveUp[x]) continue;
       if (cur[x] === ZERO) count0++;
       else if (cur[x] === ONE) count1++;
@@ -784,61 +645,41 @@ class Engine {
     let gaveUpNow = false;
     for (let q = begin; q < end; q++) {
       const x = members[q]!;
-      if (this.appendHistory(x, value, 1)) gaveUpNow = true;
-      lastPass[x] = this.passNo;
-      floating[x] = this.ordered ? 0 : 1;
+      if (this.recordHeld(x, value)) gaveUpNow = true;
       this.setNext(x, value);
       this.setContended(x, false);
     }
     // A member that gave up is left out of the next vote, which can change the value with no level changing.
-    if (gaveUpNow) this.requeue(members[begin]!);
+    if (gaveUpNow) this.pushSeed(members[begin]!);
   }
 
-  /** Passes since the net's last history entry in which its held value did not change still count for the dense solver. */
-  private replaySkippedPasses(x: number): void {
-    if (this.histTick[x] !== this.tickNo) this.resetHistory(x);
-    if (!this.floating[x]) return;
-    const length = this.histLen[x]!;
-    const previous = length > 0 ? this.hist[x * HISTORY_WINDOW + ((this.histStart[x]! + length - 1) % HISTORY_WINDOW)]! : this.cur[x]!;
-    this.appendHistory(x, previous, this.passNo - 1 - this.lastPass[x]!);
-  }
-
-  private leaveFloating(x: number): void {
-    if (this.ordered) return;
-    this.replaySkippedPasses(x);
-    this.floating[x] = 0;
-  }
-
-  /** Same bookkeeping as the dense solver does once per pass, `times` passes in a row with an unchanged value. */
-  private appendHistory(x: number, value: number, times: number): boolean {
+  /** Oscillation damper: a floating net that flips more than a few times in a short window gives up voting. */
+  private recordHeld(x: number, value: number): boolean {
     const { hist, histLen, histStart, flips, gaveUp } = this;
     const base = x * HISTORY_WINDOW;
     const gaveUpBefore = gaveUp[x]!;
-    for (let i = 0; i < times && i <= HISTORY_WINDOW; i++) {
-      const length = histLen[x]!;
-      if (length > 0) {
-        const lastIdx = (histStart[x]! + length - 1) % HISTORY_WINDOW;
-        if (hist[base + lastIdx] !== value) flips[x]!++;
-      }
-      if (length < HISTORY_WINDOW) {
-        hist[base + ((histStart[x]! + length) % HISTORY_WINDOW)] = value;
-        histLen[x] = length + 1;
-      } else {
-        const start = histStart[x]!;
-        const evicted = hist[base + start]!;
-        hist[base + start] = value;
-        histStart[x] = (start + 1) % HISTORY_WINDOW;
-        const nextOldest = hist[base + histStart[x]!]!;
-        if (evicted !== nextOldest) flips[x] = Math.max(0, flips[x]! - 1);
-      }
-      if (flips[x]! > WINDOW_FLIP_LIMIT) gaveUp[x] = 1;
+    const length = histLen[x]!;
+    if (length > 0) {
+      const lastIdx = (histStart[x]! + length - 1) % HISTORY_WINDOW;
+      if (hist[base + lastIdx] !== value) flips[x]!++;
     }
+    if (length < HISTORY_WINDOW) {
+      hist[base + ((histStart[x]! + length) % HISTORY_WINDOW)] = value;
+      histLen[x] = length + 1;
+    } else {
+      const start = histStart[x]!;
+      const evicted = hist[base + start]!;
+      hist[base + start] = value;
+      histStart[x] = (start + 1) % HISTORY_WINDOW;
+      const nextOldest = hist[base + histStart[x]!]!;
+      if (evicted !== nextOldest) flips[x] = Math.max(0, flips[x]! - 1);
+    }
+    if (flips[x]! > WINDOW_FLIP_LIMIT) gaveUp[x] = 1;
     return gaveUpBefore === 0 && gaveUp[x] === 1;
   }
 
   private resetHistory(x: number): void {
     this.histTick[x] = this.tickNo;
-    this.lastPass[x] = 0;
     this.histLen[x] = 0;
     this.histStart[x] = 0;
     this.flips[x] = 0;
@@ -1005,18 +846,14 @@ class Engine {
     this.enqueue(node);
   }
 
-  private requeue(net: number): void {
-    if (this.ordered) this.pushSeed(net);
-    else this.pending.push(net);
+  private addSeed(net: number): void {
+    if (this.hubOf[net]! < 0) this.pushSeed(net);
   }
 
-  private relaxOrdered(prevLevelOf: Map<string, Level>, maxEvaluations: number): EventRelaxed {
+  relax(prevLevelOf: Map<string, Level>, maxEvaluations: number): SolverRelaxed {
     this.tickNo++;
-    this.passNo = 0;
     if (prevLevelOf !== this.lastLevelOf) this.reseed(prevLevelOf);
     this.refreshDrivers();
-    for (const net of this.pending) this.pushSeed(net);
-    this.pending = [];
     for (const node of this.deferred) {
       this.deferredFlag[node] = 0;
       this.enqueue(node);
@@ -1033,11 +870,7 @@ class Engine {
       this.queued[node] = 0;
       if (node >= cccCount && node !== this.hubNode) {
         const device = node - cccCount;
-        if (!this.deviceDirty[device]) continue;
-        this.dirtyDevices = [device];
-        const touched: number[] = [];
-        this.refreshExternal(touched);
-        for (const net of touched) this.pushSeed(net);
+        if (this.deviceDirty[device]) this.refreshDevice(device);
         continue;
       }
       if (node !== this.hubNode) {
@@ -1061,34 +894,13 @@ class Engine {
       this.evaluate(seeds);
       this.commit();
     }
-    return this.finish(settled, mostEvaluations);
-  }
 
-  private finish(settled: boolean, iterations: number): EventRelaxed {
     const levelOf = new LevelView(this.s.indexOf, this.cur.slice());
     const ids = this.s.netIds;
     const contended = new Set<string>();
     for (const net of this.contSet) contended.add(ids[net]!);
     this.lastLevelOf = levelOf;
-    return { levelOf, contended, settled, iterations, levelAt: (i) => LEVELS[this.cur[i] ?? Z]! };
-  }
-
-  relax(prevLevelOf: Map<string, Level>, maxIterations: number): EventRelaxed {
-    if (this.ordered) return this.relaxOrdered(prevLevelOf, maxIterations);
-    this.tickNo++;
-    this.passNo = 0;
-    if (prevLevelOf !== this.lastLevelOf) this.reseed(prevLevelOf);
-    this.refreshDrivers();
-    this.markAllDevicesDirty();
-
-    let iterations = 0;
-    let changed = true;
-    while (changed && iterations < maxIterations) {
-      iterations++;
-      changed = this.pass();
-    }
-
-    return this.finish(!changed, iterations);
+    return { levelOf, contended, settled, iterations: mostEvaluations, levelAt: (i) => LEVELS[this.cur[i] ?? Z]! };
   }
 
   /** In shadow mode the dense solver's Map is the one handed back to the caller; follow it. */
@@ -1097,29 +909,23 @@ class Engine {
   }
 }
 
-const lockstepEngines = new WeakMap<EventStructure, Engine>();
-const orderedEngines = new WeakMap<EventStructure, Engine>();
+const engines = new WeakMap<SolverStructure, Engine>();
 
-function engineFor(structure: EventStructure, ordered: boolean): Engine {
-  const engines = ordered ? orderedEngines : lockstepEngines;
+function engineFor(structure: SolverStructure): Engine {
   let engine = engines.get(structure);
   if (!engine) {
-    engine = new Engine(structure, ordered);
+    engine = new Engine(structure);
     engines.set(structure, engine);
   }
   return engine;
 }
 
-export function eventRelax(
-  structure: EventStructure,
-  prevLevelOf: Map<string, Level>,
-  maxIterations: number,
-  ordered = false,
-): EventRelaxed {
-  return engineFor(structure, ordered).relax(prevLevelOf, maxIterations);
+/** One tick from `prevLevelOf`; no group is evaluated more than `maxEvaluations` times. */
+export function orderedRelax(structure: SolverStructure, prevLevelOf: Map<string, Level>, maxEvaluations: number): SolverRelaxed {
+  return engineFor(structure).relax(prevLevelOf, maxEvaluations);
 }
 
 /** Make the engine continue from `levelOf` (shared with the caller), or from scratch when null. */
-export function adoptLevelOf(structure: EventStructure, levelOf: Map<string, Level> | null, ordered = false): void {
-  engineFor(structure, ordered).adopt(levelOf);
+export function adoptLevelOf(structure: SolverStructure, levelOf: Map<string, Level> | null): void {
+  engineFor(structure).adopt(levelOf);
 }

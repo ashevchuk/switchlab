@@ -345,28 +345,27 @@ details of the rules.
 
 ### Engines
 
-Four implementations compute a tick; `SOLVER_ENGINE` (or `setSolverEngine`)
-picks one, `ordered` is the default.
+`SOLVER_ENGINE` (or `setSolverEngine`) picks the implementation of a tick;
+`ordered` is the default.
 
 | Engine | Evaluation | Use |
 |---|---|---|
-| `ordered` | Priority queue over the static channel-connected groups, ranked by a depth-first reverse postorder of the gate dependency graph; groups commit in place | Default |
-| `event` | Same synchronous passes as `jacobi`, but only groups whose inputs changed are recomputed | Reference that is bit-identical to `jacobi` |
+| `ordered` (`src/sim/orderedSolver.ts`) | Priority queue over the static channel-connected groups, ranked by a depth-first reverse postorder of the gate dependency graph; groups commit in place | Default |
 | `jacobi` | Every net recomputed on every pass, all passes synchronous, at most 64 passes per tick | Original reference, also used for Soft to Gates POR ticks |
-| `shadow`, `shadow-ordered` | Run `event` or `ordered` next to `jacobi` and throw with the differing nets on any divergence | Verification |
+| `shadow-ordered` | Runs `ordered` next to `jacobi` (with a cap high enough to settle) and throws with the differing nets on any divergence that no floating node explains | Verification |
 
 `ordered` evaluates a group once per tick on the acyclic part of a circuit and
 re-evaluates groups only along real feedback, with a limit of 64 evaluations per
 group per tick (`iterations` reports the largest count, `settled` is false when
-a group hit the limit and its pending work is carried to the next tick). The
-synchronous engines glitch their way through deep logic and, for the gate-level
-Z80, often need more than 64 passes; the tick was cut off half-settled and the
+a group hit the limit and its pending work is carried to the next tick). `jacobi`
+glitches its way through deep logic and, for the gate-level Z80, often needs more
+than 64 passes; the tick was cut off half-settled and the
 half-settled state carried on, which made the Z80 run a different program than
 the soft interpreter.
 
-### Where `ordered` differs from the synchronous engines
+### Where `ordered` differs from `jacobi`
 
-- **A short is local.** In `jacobi` and `event` VCC and GND are ordinary nets, so
+- **A short is local.** In `jacobi` VCC and GND are ordinary nets, so
   any conducting path between them put every net tied to either rail at `Z`. In
   `ordered` the groups tied to a rail are never merged, and a group tied to both
   levels, or driven both ways, reads `Z` and is flagged `contended` on its own
@@ -698,7 +697,7 @@ over it. `solver.test.ts`'s test for this checks that `contended` fires on
 snapshot — a single-pass check would pass or fail depending on pure
 iteration-count parity, which is not something worth asserting about.
 
-The finding above describes the synchronous engines. With `ordered` a short only
+The finding above describes `jacobi`. With `ordered` a short only
 blanks the group that has it (see "The solver").
 
 `TRI_BUF` is seeded as a placeable stdcell (`stdcells.ts`) exactly like
