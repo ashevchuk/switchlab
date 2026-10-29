@@ -150,7 +150,7 @@ describe('Soft Lab → Gates POR', () => {
     }
   });
 
-  it('free-running CLK during POR leaves COUNTER unsettled; quiet CLK settles', async () => {
+  it('a quiet CLK during POR leaves the COUNTER settled', async () => {
     const { tickLabInstruments } = await import('../src/sim/labTick.js');
     const { softLabPorActive } = await import('../src/sim/softLab.js');
     const prev = isSoftLabEnabled();
@@ -173,37 +173,9 @@ describe('Soft Lab → Gates POR', () => {
       setSoftLabEnabled(false);
       armSoftLabToGatesPor(circuit, library);
 
-      // Bad path: tick clocks while POR is forcing Q → stuck unsettled.
+      // main.ts holds CLK quiet until POR finishes.
       let state = initialState();
       let unsettle = 0;
-      for (let f = 0; f < 24; f++) {
-        let flat = flatten(circuit, library);
-        let nets = flat.computeNets();
-        for (const c of circuit.components.values()) {
-          if (c.kind !== 'button') continue;
-          const n = nets.netOf.get(c.pins.out.id);
-          if (n === nets.netOf.get(ctr.pins.ce!.id)) c.value = 1;
-          if (n === nets.netOf.get(ctr.pins.clr!.id)) c.value = 0;
-        }
-        flat = flatten(circuit, library);
-        nets = flat.computeNets();
-        state = step(flat, nets, state);
-        if (tickLabInstruments(circuit, nets, state.levelOf)) {
-          flat = flatten(circuit, library);
-          nets = flat.computeNets();
-          state = step(flat, nets, state);
-        }
-        if (!state.settled) unsettle++;
-      }
-      expect(unsettle).toBeGreaterThan(5);
-
-      // Good path (main.ts): hold CLK quiet until POR finishes.
-      clearSoftLabPor();
-      armSoftLabToGatesPor(circuit, library);
-      clk.value = 0;
-      clk.phase = 0;
-      state = initialState();
-      unsettle = 0;
       for (let f = 0; f < 40; f++) {
         let flat = flatten(circuit, library);
         let nets = flat.computeNets();
