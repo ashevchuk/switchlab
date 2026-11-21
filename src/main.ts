@@ -81,6 +81,10 @@ import { makeSoftCanvasResolve } from './ui/softCanvasResolve.js';
 import { chipBoxSize, isOrientable, memoryBoxSize, orientSelection } from './sim/orientation.js';
 import { describeError, describeWorkerRecovery, isBrowserNoise, type ErrorSource } from './ui/errorReport.js';
 import { showErrorToast } from './ui/Toast.js';
+import { appendWorkspace } from './mcp/publish.js';
+import { registerWebMcpTools } from './mcp/register.js';
+import { createTools } from './mcp/tools.js';
+import { Workspace } from './mcp/workspace.js';
 import {
   showContextMenu,
   hideContextMenu,
@@ -390,6 +394,26 @@ editor.onBeforeEdit = () => {
   autosave.schedule();
 };
 editor.onCancelEdit = () => editHistory.discardLast(editor.circuit);
+
+const mcpWorkspace = new Workspace(() => library);
+registerWebMcpTools(
+  createTools(mcpWorkspace, {
+    publishToCanvas: (ws) => {
+      editHistory.checkpoint(topCircuit);
+      try {
+        const { placedComponents, chips, bounds } = appendWorkspace(topCircuit, library, ws);
+        if (editor.circuit !== topCircuit) resetEditorToTop();
+        camera.fit(bounds, vw(), vh());
+        uiDirty = true;
+        autosave.schedule();
+        return { placedComponents, chips };
+      } catch (e) {
+        editHistory.discardLast(topCircuit);
+        throw e;
+      }
+    },
+  }),
+).catch((e: unknown) => console.warn('WebMCP registration failed', e));
 objectInspector.onBeforeEdit = () => {
   editHistory.checkpoint(editor.circuit);
   bumpDefRevisionOnEdit();

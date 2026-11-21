@@ -27,11 +27,13 @@ function stubLabelPos(pin: Pin): { x: number; y: number } {
 
 /**
  * Convert every wire of length >= `minLength` into local same-named labels.
+ * `alsoLabel` additionally selects shorter wires by their two end components.
  * Returns how many wires were removed.
  */
 export function replaceLongWiresWithLabels(
   circuit: Circuit,
   minLength = LONG_WIRE_LABEL_THRESHOLD,
+  alsoLabel?: (a: Component, b: Component) => boolean,
 ): number {
   const pinOf = new Map<string, Pin>();
   const ownerOf = new Map<string, Component>();
@@ -75,7 +77,10 @@ export function replaceLongWiresWithLabels(
     const a = pinOf.get(w.a);
     const b = pinOf.get(w.b);
     if (!a || !b) return false;
-    return Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y) >= minLength;
+    if (Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y) >= minLength) return true;
+    const oa = ownerOf.get(w.a);
+    const ob = ownerOf.get(w.b);
+    return alsoLabel !== undefined && oa !== undefined && ob !== undefined && alsoLabel(oa, ob);
   });
 
   for (const w of longWires) {
