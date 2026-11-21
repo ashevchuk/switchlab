@@ -188,5 +188,20 @@ describe('feedback aimed at an agent', () => {
     expect(ws.simulate(MAIN_SCOPE, { a: 0 })).toEqual({ outputs: { lamp: 1 }, warnings: [] });
     expect(ws.describe(MAIN_SCOPE).components).toContainEqual({ name: 'lamp', type: 'led', label: 'lamp' });
   });
-});
 
+  it('warns when an input or probe is placed inside a chip under construction', () => {
+    const ws = new Workspace();
+    ws.beginChip('ODD');
+    const built = ws.build('ODD', { components: [{ name: 'x', type: 'input' }, { name: 'n', type: 'NOT' }, { name: 'q', type: 'probe' }] });
+    expect(built.warnings).toEqual([
+      'x (input) inside a chip would become part of the chip. Ports are chosen at finish_chip; expose the inner pin there instead.',
+      'q (probe) inside a chip would become part of the chip. Ports are chosen at finish_chip; expose the inner pin there instead.',
+    ]);
+  });
+
+  it('points at begin_chip when a chip scope does not exist yet', () => {
+    expect(() => new Workspace().build('MAJ3', { components: [{ name: 'a', type: 'AND' }] })).toThrow(
+      /unknown scope: MAJ3\. Known: main\. A chip's scope is created by begin_chip with the chip's name\./,
+    );
+  });
+});

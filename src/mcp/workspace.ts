@@ -376,7 +376,7 @@ export class Workspace {
     const onlyNew = scope.canvasBase ? new Set(addedComponents) : undefined;
     // A chip under construction leaves its future ports unwired on purpose; finish_chip reports what is really loose.
     const isChipDraft = scopeName !== MAIN_SCOPE && scopeName !== CANVAS_SCOPE;
-    const warnings = isChipDraft ? [] : this.unwiredChipPins(scope, onlyNew);
+    const warnings = isChipDraft ? this.ioInsideChip(scope, addedComponents) : this.unwiredChipPins(scope, onlyNew);
     return { placed: addedComponents, wired: addedWires.length, warnings };
   }
 
@@ -661,7 +661,9 @@ export class Workspace {
 
   private scope(name: string): Scope {
     const scope = this.scopes.get(name);
-    if (!scope) throw new WorkspaceError(`unknown scope: ${name}. Known: ${this.scopeNames().join(', ')}`);
+    if (!scope) {
+      throw new WorkspaceError(`unknown scope: ${name}. Known: ${this.scopeNames().join(', ')}. A chip's scope is created by begin_chip with the chip's name.`);
+    }
     return scope;
   }
 
@@ -789,6 +791,13 @@ export class Workspace {
       }
       members.forEach((m, i) => setBit(m, Math.floor(value / 2 ** i) % 2 === 1 ? 1 : 0));
     }
+  }
+
+  /** An input or probe inside a chip would be folded into its guts; the chip's ports are picked at finish_chip. */
+  private ioInsideChip(scope: Scope, names: string[]): string[] {
+    return names
+      .filter((name) => ['input', 'probe', 'led'].includes(scope.byName.get(name)?.kind ?? ''))
+      .map((name) => `${name} (${scope.byName.get(name)!.kind}) inside a chip would become part of the chip. Ports are chosen at finish_chip; expose the inner pin there instead.`);
   }
 
   private unwiredChipPins(scope: Scope, only?: Set<string>, exposed: Pin[] = []): string[] {

@@ -29,13 +29,17 @@ test('tools registered with the browser run through executeTool', async ({ page 
   expect(listed.every((t) => t.schemaIsObject)).toBe(true);
   expect(listed.find((t) => t.name === 'simulate')?.annotations).toMatchObject({ readOnlyHint: true });
 
-  // This Chromium takes the arguments as a JSON string and returns the result as one.
+  // The spec takes an object; some earlier Chromium builds take a JSON string. Both return the result as a JSON string.
   const run = (name: string, input: unknown) =>
     page.evaluate(
       async ({ name, input }) => {
-        const mc = (document as unknown as { modelContext: { getTools(): Promise<{ name: string }[]>; executeTool(t: unknown, args: string): Promise<string> } }).modelContext;
+        const mc = (document as unknown as { modelContext: { getTools(): Promise<{ name: string }[]>; executeTool(t: unknown, args: unknown): Promise<string> } }).modelContext;
         const tool = (await mc.getTools()).find((t) => t.name === name);
-        return JSON.parse(await mc.executeTool(tool, JSON.stringify(input)));
+        try {
+          return JSON.parse(await mc.executeTool(tool, input));
+        } catch {
+          return JSON.parse(await mc.executeTool(tool, JSON.stringify(input)));
+        }
       },
       { name, input },
     );
