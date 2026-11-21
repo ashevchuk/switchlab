@@ -7,8 +7,11 @@ const ROW_GAP = 36;
 const SMALL_COMPONENT = { w: 40, h: 36 };
 const ORDERING_SWEEPS = 2;
 
+const BUS_PROBE_PIN_PITCH = 20;
+
 function sizeOf(c: Component): { w: number; h: number } {
   if (c.kind === 'chip') return { w: chipBodyWidth(c), h: chipBoxHeight(c) };
+  if (c.kind === 'busprobe') return { w: 64, h: Math.max(SMALL_COMPONENT.h, c.bitWidth * BUS_PROBE_PIN_PITCH + 16) };
   return SMALL_COMPONENT;
 }
 
@@ -19,7 +22,7 @@ function drivesFrom(c: Component, pin: Pin): boolean {
 }
 
 function isSink(c: Component): boolean {
-  return c.kind === 'probe' || c.kind === 'led';
+  return c.kind === 'probe' || c.kind === 'led' || c.kind === 'busprobe';
 }
 
 function consumesAt(c: Component, pin: Pin): boolean {

@@ -3,6 +3,7 @@ import { ChipLibrary } from '../src/sim/ChipLibrary.js';
 import { Circuit } from '../src/sim/Circuit.js';
 import { flatten } from '../src/sim/hierarchy.js';
 import { makeInput } from '../src/sim/library.js';
+import { decodeBusProbe } from '../src/sim/busProbe.js';
 import { initialState, step } from '../src/sim/solver.js';
 import { seedStandardCells } from '../src/sim/stdcells.js';
 import { appendWorkspace } from '../src/mcp/publish.js';
@@ -128,5 +129,85 @@ describe('appendWorkspace', () => {
     expect([read(0), read(1)]).toEqual([0, 1]);
     const names = [...top.components.values()].filter((c) => c.kind === 'label').map((c) => (c as { name: string }).name);
     expect(names).toContain('a_2');
+  });
+
+  it('puts at most one label on any pin, so a name is never drawn twice side by side', () => {
+    const { top, library } = liveProject();
+    const ws = new Workspace();
+    ws.build(MAIN_SCOPE, {
+      components: [
+        { name: 'x', type: 'input', count: 4 }, { name: 'n', type: 'NOT', count: 4 },
+        { name: 'y', type: 'probe', count: 4 }, { name: 'z', type: 'probe' }, { name: 'zin', type: 'input' },
+      ],
+      wires: [...Array(4).keys()].flatMap((i) => [[`x${i}`, `n${i}.in`], [`n${i}.out`, `y${i}`]]).concat([['zin', 'z']]),
+    });
+    appendWorkspace(top, library, ws);
+    const ownerKind = (pinId: string) => top.components.get(pinId.slice(0, pinId.indexOf(':')))?.kind;
+    const offenders: string[] = [];
+    for (const c of top.components.values()) {
+      if (c.kind === 'label') continue;
+      for (const pin of Object.values(c.pins as Record<string, { id: string }>)) {
+        const tied = [...top.wires.values()].filter((w) => (w.a === pin.id && ownerKind(w.b) === 'label') || (w.b === pin.id && ownerKind(w.a) === 'label'));
+        if (tied.length > 1) offenders.push(`${c.kind} ${pin.id}: ${tied.length} labels`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  describe('probe buses', () => {
+    function publishInverterBus(width: number) {
+      const { top, library } = liveProject();
+      const ws = new Workspace();
+      ws.build(MAIN_SCOPE, {
+        components: [
+          { name: 'x', type: 'input', count: width },
+          { name: 'n', type: 'NOT', count: width },
+          { name: 'y', type: 'probe', count: width },
+          { name: 'single', type: 'probe' },
+          { name: 'one', type: 'vcc' },
+        ],
+        wires: [...Array(width).keys()].flatMap((i) => [[`x${i}`, `n${i}.in`], [`n${i}.out`, `y${i}`]]).concat([['one', 'single']]),
+      });
+      appendWorkspace(top, library, ws);
+      return { top, library };
+    }
+
+    it('become one bus probe with the bus name as its label, and single probes stay probes', () => {
+      const { top } = publishInverterBus(4);
+      const buses = [...top.components.values()].filter((c) => c.kind === 'busprobe');
+      expect(buses).toHaveLength(1);
+      expect(buses[0]).toMatchObject({ kind: 'busprobe', label: 'y', bitWidth: 4, radix: 'dec' });
+      expect([...top.components.values()].filter((c) => c.kind === 'probe')).toHaveLength(1);
+    });
+
+    it('read the right value from the published circuit', () => {
+      const { top, library } = publishInverterBus(4);
+      const inputs = [...top.components.values()].filter((c) => c.kind === 'input') as { value: 0 | 1 }[];
+      [1, 0, 1, 0].forEach((bit, i) => (inputs[i]!.value = bit as 0 | 1));
+      const { nets, state } = settledLevels(top, library);
+      const bus = [...top.components.values()].find((c) => c.kind === 'busprobe');
+      if (bus?.kind !== 'busprobe') throw new Error('no bus probe published');
+      const bits = bus.pinOrder.map((name) => ({ level: state.levelOf.get(nets.netOf.get(bus.pins[name]!.id)!) ?? 'Z', contended: false }));
+      expect(decodeBusProbe(bits, 'dec')).toMatchObject({ value: 10, text: '10' });
+    });
+
+    it('name each bit net after the bus, so a label pair reads y0, y1, ...', () => {
+      const { top } = publishInverterBus(4);
+      const names = [...top.components.values()].filter((c) => c.kind === 'label').map((c) => (c as { name: string }).name);
+      expect(names).toEqual(expect.arrayContaining(['y0', 'y1', 'y2', 'y3']));
+    });
+
+    it('are read back by name from the opened canvas', () => {
+      const { top, library } = publishInverterBus(4);
+      const ws = new Workspace(() => library);
+      ws.openCanvas(top);
+      expect(ws.simulate('canvas', { x: 5 }).outputs.y).toEqual({ value: 10, bits: '1010' });
+    });
+
+    it('leave a bus wider than the editor allows as separate probes', () => {
+      const { top } = publishInverterBus(33);
+      expect([...top.components.values()].filter((c) => c.kind === 'busprobe')).toHaveLength(0);
+      expect([...top.components.values()].filter((c) => c.kind === 'probe')).toHaveLength(34);
+    });
   });
 });

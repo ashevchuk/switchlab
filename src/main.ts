@@ -81,6 +81,7 @@ import { makeSoftCanvasResolve } from './ui/softCanvasResolve.js';
 import { chipBoxSize, isOrientable, memoryBoxSize, orientSelection } from './sim/orientation.js';
 import { describeError, describeWorkerRecovery, isBrowserNoise, type ErrorSource } from './ui/errorReport.js';
 import { showErrorToast } from './ui/Toast.js';
+import { decodeBusProbe } from './sim/busProbe.js';
 import { appendWorkspace, applyCanvasEdits } from './mcp/publish.js';
 import { registerWebMcpTools } from './mcp/register.js';
 import { createTools } from './mcp/tools.js';
@@ -1900,7 +1901,7 @@ const watchStripEl = document.getElementById('watch-strip');
 
 function refreshWatchStrip(): void {
   if (!watchStripEl) return;
-  const probes = [...editor.circuit.components.values()].filter((c) => c.kind === 'probe');
+  const probes = [...editor.circuit.components.values()].filter((c) => c.kind === 'probe' || c.kind === 'busprobe');
   if (probes.length === 0) {
     watchStripEl.classList.remove('visible');
     watchStripEl.replaceChildren();
@@ -1918,7 +1919,7 @@ function refreshWatchStrip(): void {
   title.textContent = 'Watch';
   watchStripEl.appendChild(title);
   for (const p of probes) {
-    if (p.kind !== 'probe') continue;
+    if (p.kind !== 'probe' && p.kind !== 'busprobe') continue;
     let item = existing.get(p.id);
     if (!item) {
       item = document.createElement('span');
@@ -1933,7 +1934,7 @@ function refreshWatchStrip(): void {
       item.append(name, lvl);
     }
     const nameEl = item.querySelector('.watch-name')!;
-    nameEl.textContent = p.label?.trim() || 'probe';
+    nameEl.textContent = p.label?.trim() || (p.kind === 'busprobe' ? 'bus' : 'probe');
     watchStripEl.appendChild(item);
   }
 }
@@ -1947,13 +1948,19 @@ function updateWatchLevels(
     const id = (child as HTMLElement).dataset.probeId;
     if (!id) continue;
     const c = editor.circuit.components.get(id);
-    if (!c || c.kind !== 'probe') {
+    if (!c || (c.kind !== 'probe' && c.kind !== 'busprobe')) {
       stale = true;
       continue;
     }
-    const { level } = resolve(c.pins.in.id);
     const lvlEl = child.querySelector('.watch-lvl') as HTMLElement | null;
     if (!lvlEl) continue;
+    if (c.kind === 'busprobe') {
+      const decoded = decodeBusProbe(c.pinOrder.map((name) => resolve(c.pins[name]!.id)), c.radix);
+      lvlEl.dataset.lvl = 'bus';
+      lvlEl.textContent = decoded.text;
+      continue;
+    }
+    const { level } = resolve(c.pins.in.id);
     const text = String(level);
     lvlEl.dataset.lvl = text;
     lvlEl.textContent = text;

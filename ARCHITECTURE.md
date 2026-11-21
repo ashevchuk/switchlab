@@ -5110,6 +5110,13 @@ headless run on the live circuit would disturb the running app.
   (as `applyLoadedProject` does) would break them. Added components are
   `structuredClone`d so the sandbox and the canvas never share state, and chip
   `defId`s are remapped to the canvas library (standard cells by name).
+- **Probe buses.** `replaceProbeBuses` publishes a bus of probes as one
+  `busprobe` (decimal, labelled with the bus name, at most 32 bits), rewiring the
+  member probes' wires onto its pins; the per-bit net labels (`y0`..) are added
+  after layout, because a label added earlier is laid out as a free-standing
+  component and lands in the first column. The watch strip lists `busprobe`
+  items too, decoded with `decodeBusProbe`, and `simulate` on the canvas reads a
+  bus probe as a bus.
 - **Names on the canvas.** Canvas components have only ids, which made a circuit
   the agent had published unusable by name. `canvasAliases` names a probe or LED
   by its label and an input or button by the net label tied to it (`publish`

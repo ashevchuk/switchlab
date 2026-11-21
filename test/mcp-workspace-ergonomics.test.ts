@@ -175,7 +175,7 @@ describe('feedback aimed at an agent', () => {
     ws.build(MAIN_SCOPE, { components: [{ name: 'a', type: 'input' }] });
     expect(ws.simulate(MAIN_SCOPE, { a: 1 })).toEqual({
       outputs: {},
-      warnings: ['this scope has no probes or LEDs, so there is nothing to read: add some with build'],
+      warnings: ['this scope has no probes, LEDs or bus probes, so there is nothing to read: add some with build'],
     });
   });
 

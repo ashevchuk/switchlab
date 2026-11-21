@@ -69,6 +69,12 @@ test.describe('WebMCP tools', () => {
     expect(run.sim.outputs.sum).toEqual({ value: 14, bits: '1110' });
     expect(run.published).toMatchObject({ ok: true, chips: ['ADD4'] });
     expect(run.after).toBeGreaterThan(run.before);
+    const strip = page.locator('#watch-strip .watch-item');
+    await expect(strip.filter({ hasText: 'sum' })).toHaveCount(1);
+    await expect(strip.filter({ hasText: 'sum' })).toContainText('14');
+    const names = await strip.locator('.watch-name').allTextContents();
+    expect(names).toContain('sum');
+    expect(names.filter((n) => /^sum\d$/.test(n))).toEqual([]);
 
     await page.locator('#canvas').click({ position: { x: 5, y: 5 } });
     await page.keyboard.press('Control+z');

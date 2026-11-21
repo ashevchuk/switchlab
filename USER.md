@@ -103,6 +103,7 @@ What stays safe:
 - **`apply_to_canvas` applies only the difference.** Parts the agent did not touch, including RAM contents and machine links, stay exactly as they are. If you changed the canvas after `open_canvas`, it refuses and applies nothing.
 - **Ctrl+Z undoes a publish or an apply in one step.**
 - **Your chips are usable.** Chips on the canvas are shared with the agent, not copied. It can rebuild one in place (`begin_chip` with `replace`, then `publish_to_canvas` with `replace`): the ports must stay the same, and every instance and every chip built on it follows. The instances then show the usual "edited" marker.
+- A bus of probes (`y0`..`y15`) is published as one **bus probe** with the bus name as its label and a decimal readout, so the Watch strip shows one item (`y 65025`) instead of sixteen; a bus wider than 32 bits stays separate probes. The Watch strip lists the probes and bus probes of the level you are viewing; the **Watch List** window is separate and holds pins you add by hand (Ctrl+W).
 - Nets in a published circuit are named after the agent's inputs and probes; a name already used by a label on the canvas is renamed (`a0` becomes `a0_2`), because labels with one name are one net.
 
 Limits: the agent cannot change the type, label or value of an existing component, new parts are placed in a block to the right of the canvas rather than next to what they connect to, and the sandbox is lost when the page reloads (chips and published circuits are on the canvas, so they stay).

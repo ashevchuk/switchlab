@@ -24,6 +24,8 @@ const MIN_TICKS = 4;
 const MAX_SETTLE_ROUNDS = 16;
 const MAX_REPORTED_FAILURES = 5;
 const MAX_TABLE_INPUT_BITS = 8;
+/** The editor's bus probe has at most this many bits. */
+const MAX_BUS_PROBE_BITS = 32;
 const MAX_CLOCK_CYCLES = 64;
 const MAX_SEQUENCE_STEPS = 64;
 const GRID_COLUMNS = 10;
@@ -131,6 +133,13 @@ export interface CanvasDiff {
   addedWires: Wire[];
 }
 
+/** What a run reads: single probes and LEDs by name, and each bus probe as its bits, LSB first. */
+interface ProbeRead {
+  levels: Map<string, Level>;
+  wide: Map<string, Level[]>;
+  warnings: string[];
+}
+
 interface Scope {
   circuit: Circuit;
   byName: Map<string, Component>;
@@ -163,7 +172,7 @@ function canvasAliases(circuit: Circuit): Map<string, string> {
   const wanted = new Map<string, string>();
   for (const c of circuit.components.values()) {
     const own = (c as { label?: string }).label;
-    if ((c.kind === 'probe' || c.kind === 'led' || c.kind === 'busswitch') && own) wanted.set(c.id, own);
+    if ((c.kind === 'probe' || c.kind === 'led' || c.kind === 'busswitch' || c.kind === 'busprobe') && own) wanted.set(c.id, own);
   }
   for (const w of circuit.wires.values()) {
     for (const [pin, other] of [[w.a, w.b], [w.b, w.a]] as const) {
@@ -246,6 +255,19 @@ export class Workspace {
 
   mainCircuit(): Circuit {
     return this.scope(MAIN_SCOPE).circuit;
+  }
+
+  /** Probe buses of the main circuit, by bus name, as the ids of their probes in bit order (LSB first). */
+  mainProbeBuses(): Map<string, string[]> {
+    const scope = this.scope(MAIN_SCOPE);
+    const buses = new Map<string, string[]>();
+    for (const [bus, members] of scope.buses) {
+      const comps = members.map((m) => scope.byName.get(m));
+      if (members.length >= 2 && members.length <= MAX_BUS_PROBE_BITS && comps.every((c) => c?.kind === 'probe')) {
+        buses.set(bus, comps.map((c) => c!.id));
+      }
+    }
+    return buses;
   }
 
   /** Component id to the name the model gave it, for the inputs and probes of the main circuit. */
@@ -420,8 +442,8 @@ export class Workspace {
 
   simulate(scopeName: string, inputs: Record<string, number> = {}): SimulateResult {
     const scope = this.scope(scopeName);
-    const { levels, warnings } = this.readProbes(scope, inputs);
-    return { outputs: this.formatReadings(scope, levels), warnings };
+    const read = this.readProbes(scope, inputs);
+    return { outputs: this.formatReadings(scope, read), warnings: read.warnings };
   }
 
   simulateSequence(scopeName: string, steps: Record<string, number>[]): TraceResult {
@@ -433,7 +455,7 @@ export class Workspace {
     const trace = steps.map((inputs) => {
       const read = this.readProbes(scope, inputs);
       read.warnings.forEach((w) => warnings.add(w));
-      return this.formatReadings(scope, read.levels);
+      return this.formatReadings(scope, read);
     });
     return { trace, warnings: [...warnings] };
   }
@@ -453,7 +475,7 @@ export class Workspace {
       this.readProbes(scope, { [clock]: 1 });
       const read = this.readProbes(scope, { [clock]: 0 });
       read.warnings.forEach((w) => warnings.add(w));
-      trace.push(this.formatReadings(scope, read.levels));
+      trace.push(this.formatReadings(scope, read));
     }
     return { trace, warnings: [...warnings] };
   }
@@ -586,8 +608,9 @@ export class Workspace {
           throw new WorkspaceError(`"${key}" is not an input of ${chipName}`);
         }
       }
-      const { levels } = this.readProbes(scope, c.in);
-      const got = this.formatReadings(scope, levels);
+      const read = this.readProbes(scope, c.in);
+      const { levels } = read;
+      const got = this.formatReadings(scope, read);
       if (c.out === undefined) {
         result.results?.push(got);
         return;
@@ -650,9 +673,9 @@ export class Workspace {
         inputs[unit] = rest % 2 ** bits;
         rest = Math.floor(rest / 2 ** bits);
       }
-      const { levels } = this.readProbes(scope, inputs);
+      const read = this.readProbes(scope, inputs);
       const out: Record<string, number | string> = {};
-      for (const [name, reading] of Object.entries(this.formatReadings(scope, levels))) {
+      for (const [name, reading] of Object.entries(this.formatReadings(scope, read))) {
         out[name] = typeof reading === 'object' ? (reading.value ?? reading.bits) : reading;
       }
       rows.push({ in: inputs, out });
@@ -660,7 +683,8 @@ export class Workspace {
     return { rows };
   }
 
-  private formatReadings(scope: Scope, levels: Map<string, Level>): Record<string, Reading> {
+  private formatReadings(scope: Scope, read: ProbeRead): Record<string, Reading> {
+    const { levels } = read;
     const outputs: Record<string, Reading> = {};
     const inBus = new Set<string>();
     for (const [bus, members] of scope.buses) {
@@ -671,10 +695,11 @@ export class Workspace {
     for (const [name, level] of levels) {
       if (!inBus.has(name)) outputs[name] = level;
     }
+    for (const [name, bits] of read.wide) outputs[name] = bitsToValue(bits);
     return outputs;
   }
 
-  private readProbes(scope: Scope, inputs: Record<string, number>): { levels: Map<string, Level>; warnings: string[] } {
+  private readProbes(scope: Scope, inputs: Record<string, number>): ProbeRead {
     this.applyInputs(scope, inputs);
     const flat = flatten(scope.circuit, this.library);
     const netMap = flat.computeNets();
@@ -687,15 +712,21 @@ export class Workspace {
       throw new WorkspaceError('circuit did not settle: it oscillates or has a combinational feedback loop');
     }
     const levels = new Map<string, Level>();
+    const wide = new Map<string, Level[]>();
     const warnings: string[] = [];
-    for (const [name, comp] of scope.byName) {
-      if (comp.kind !== 'probe' && comp.kind !== 'led') continue;
-      const net = netMap.netOf.get(comp.pins.in.id);
+    const read = (pin: Pin, name: string): Level => {
+      const net = netMap.netOf.get(pin.id);
       if (net !== undefined && state.contended.has(net)) warnings.push(`contention on net of ${name}`);
-      levels.set(name, net === undefined ? 'Z' : (state.levelOf.get(net) ?? 'Z'));
+      return net === undefined ? 'Z' : (state.levelOf.get(net) ?? 'Z');
+    };
+    for (const [name, comp] of scope.byName) {
+      if (comp.kind === 'probe' || comp.kind === 'led') levels.set(name, read(comp.pins.in, name));
+      else if (comp.kind === 'busprobe') wide.set(name, comp.pinOrder.map((pinName) => read(comp.pins[pinName]!, name)));
     }
-    if (levels.size === 0) warnings.push('this scope has no probes or LEDs, so there is nothing to read: add some with build');
-    return { levels, warnings };
+    if (levels.size === 0 && wide.size === 0) {
+      warnings.push('this scope has no probes, LEDs or bus probes, so there is nothing to read: add some with build');
+    }
+    return { levels, wide, warnings };
   }
 
   private scope(name: string): Scope {

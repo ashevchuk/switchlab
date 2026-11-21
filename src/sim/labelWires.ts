@@ -28,12 +28,14 @@ function stubLabelPos(pin: Pin): { x: number; y: number } {
 /**
  * Convert every wire of length >= `minLength` into local same-named labels.
  * `alsoLabel` additionally selects shorter wires by their two end components.
+ * `preferredNames` (pin id to name) names a net that has no label yet.
  * Returns how many wires were removed.
  */
 export function replaceLongWiresWithLabels(
   circuit: Circuit,
   minLength = LONG_WIRE_LABEL_THRESHOLD,
   alsoLabel?: (a: Component, b: Component) => boolean,
+  preferredNames?: ReadonlyMap<string, string>,
 ): number {
   const pinOf = new Map<string, Pin>();
   const ownerOf = new Map<string, Component>();
@@ -69,6 +71,11 @@ export function replaceLongWiresWithLabels(
     if (c.kind !== 'label') continue;
     const root = find(c.pins.net.id);
     if (!nameForRoot.has(root)) nameForRoot.set(root, c.name);
+  }
+
+  for (const [pinId, name] of preferredNames ?? []) {
+    const root = find(pinId);
+    if (!nameForRoot.has(root)) nameForRoot.set(root, name);
   }
 
   let auto = 0;

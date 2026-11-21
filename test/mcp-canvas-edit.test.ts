@@ -228,10 +228,11 @@ describe('names on the canvas', () => {
     const ws = new Workspace(() => library);
     ws.openCanvas(top);
     const described = ws.describe(CANVAS_SCOPE);
-    expect(described.components.map((c) => c.name)).toEqual(expect.arrayContaining(['x0', 'x3', 'y0', 'y3']));
+    expect(described.components.map((c) => c.name)).toEqual(expect.arrayContaining(['x0', 'x3', 'y']));
     expect(described.components.find((c) => c.name === 'x2')).toMatchObject({ type: 'input', id: expect.stringMatching(/^in\d+$/) });
+    expect(described.components.find((c) => c.name === 'y')).toMatchObject({ type: 'busprobe', label: 'y' });
     expect(described.buses.x).toEqual(['x0', 'x1', 'x2', 'x3']);
-    expect(described.buses.y).toEqual(['y0', 'y1', 'y2', 'y3']);
+    expect(described.buses.y).toBeUndefined();
     expect(ws.simulate(CANVAS_SCOPE, { x: 5 }).outputs.y).toEqual({ value: 10, bits: '1010' });
     expect(ws.simulate(CANVAS_SCOPE, { x: 0 }).outputs.y).toEqual({ value: 15, bits: '1111' });
   });
@@ -242,7 +243,7 @@ describe('names on the canvas', () => {
     ws.openCanvas(top);
     ws.remove(CANVAS_SCOPE, { components: ['y'] });
     const result = applyCanvasEdits(top, library, ws);
-    expect(result).toMatchObject({ removedComponents: 4, addedComponents: 0 });
+    expect(result).toMatchObject({ removedComponents: 1, addedComponents: 0 });
   });
 
   it('keep ids where labels are shared, because a shared name would be ambiguous', () => {

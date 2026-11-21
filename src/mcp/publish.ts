@@ -4,7 +4,7 @@ import type { Component, Wire } from '../sim/types.js';
 import type { ChipDef } from '../sim/ChipLibrary.js';
 import { deserializeProject, resolveStdcellInstances, serializeSlimStdcells } from '../sim/serialize.js';
 import { replaceLongWiresWithLabels } from '../sim/labelWires.js';
-import { makeChipInstance, makeLabel, wire } from '../sim/library.js';
+import { makeBusProbe, makeChipInstance } from '../sim/library.js';
 import { layoutLayered } from './layout.js';
 import { isStdcellName } from '../sim/stdcells.js';
 import { MAIN_SCOPE, WorkspaceError } from './workspace.js';
@@ -21,7 +21,6 @@ export interface Bounds {
 }
 /** Between one column step (about 180-260 units) and two (about 430+): wires reaching past the next column become labels. */
 const LABEL_WIRES_LONGER_THAN = 320;
-const NET_LABEL_OFFSET = 22;
 
 export interface PublishResult {
   placedComponents: number;
@@ -84,9 +83,10 @@ export function appendWorkspace(
 
   let bounds: Bounds | undefined;
   if (placedComponents > 0) {
+    const busProbes = replaceProbeBuses(loaded.topCircuit, workspace.mainProbeBuses());
     layoutLayered(loaded.topCircuit);
-    nameNets(loaded.topCircuit, workspace.mainIoNames());
-    replaceLongWiresWithLabels(loaded.topCircuit, LABEL_WIRES_LONGER_THAN, isPlainIoWire);
+    const netNames = namesOfIoNets(loaded.topCircuit, workspace.mainIoNames(), busProbes);
+    replaceLongWiresWithLabels(loaded.topCircuit, LABEL_WIRES_LONGER_THAN, isPlainIoWire, netNames);
     renameClashingLabels(loaded.topCircuit, top);
 
     const existing = [...top.components.values()];
@@ -109,16 +109,23 @@ export function appendWorkspace(
   };
 }
 
-/** Tie each named input and probe to a label of the same name so its net is readable wherever it goes. */
-function nameNets(circuit: Circuit, names: Map<string, string>): void {
+/**
+ * The name each net gets on the canvas, by pin: the model's name for an input, probe or LED, and `y0`, `y1`, ...
+ * for the bits of a bus probe. Passed to the label pass rather than added as labels of their own, which would
+ * leave two labels with one name on the same pin.
+ */
+function namesOfIoNets(circuit: Circuit, names: Map<string, string>, busProbes: Map<string, string>): Map<string, string> {
+  const byPin = new Map<string, string>();
   for (const [id, name] of names) {
     const comp = circuit.components.get(id);
-    if (!comp || (comp.kind !== 'input' && comp.kind !== 'probe' && comp.kind !== 'led')) continue;
-    const pin = comp.kind === 'input' ? comp.pins.out : comp.pins.in;
-    const dx = comp.kind === 'input' ? NET_LABEL_OFFSET : -NET_LABEL_OFFSET;
-    const label = makeLabel(circuit, name, { x: pin.pos.x + dx, y: pin.pos.y });
-    wire(circuit, pin, label.pins.net);
+    if (comp?.kind === 'input') byPin.set(comp.pins.out.id, name);
+    else if (comp?.kind === 'probe' || comp?.kind === 'led') byPin.set(comp.pins.in.id, name);
   }
+  for (const [id, name] of busProbes) {
+    const bus = circuit.components.get(id);
+    if (bus?.kind === 'busprobe') bus.pinOrder.forEach((pinName, bit) => byPin.set(bus.pins[pinName]!.id, `${name}${bit}`));
+  }
+  return byPin;
 }
 
 /** Labels with one name are one net across the whole canvas, so a new net must not reuse a name already there. */
@@ -141,7 +148,7 @@ function renameClashingLabels(added: Circuit, top: Circuit): void {
 
 /** A wire between an input/probe/constant and anything else reads better as a named net than as a drawn line. */
 function isPlainIoWire(a: Component, b: Component): boolean {
-  const isIo = (c: Component) => c.kind === 'input' || c.kind === 'probe' || c.kind === 'led' || c.kind === 'source';
+  const isIo = (c: Component) => c.kind === 'input' || c.kind === 'probe' || c.kind === 'led' || c.kind === 'busprobe' || c.kind === 'source';
   return (isIo(a) || isIo(b)) && a.kind !== 'label' && b.kind !== 'label';
 }
 
@@ -271,4 +278,34 @@ export function applyCanvasEdits(top: Circuit, library: ChipLibrary, workspace: 
     chips: fresh.map((d) => d.name),
     ...(bounds ? { bounds } : {}),
   };
+}
+
+/**
+ * A bus of probes is one bus probe on the canvas: a single readout with the decoded value, one item in the
+ * watch strip, instead of one probe per bit. Returns the bus probes made, by component id, with the bus name.
+ */
+function replaceProbeBuses(circuit: Circuit, buses: Map<string, string[]>): Map<string, string> {
+  const made = new Map<string, string>();
+  for (const [name, ids] of buses) {
+    const probes = ids.map((id) => circuit.components.get(id));
+    if (probes.some((p) => p?.kind !== 'probe')) continue;
+    const at = {
+      x: probes.reduce((sum, p) => sum + p!.pos.x, 0) / probes.length,
+      y: probes.reduce((sum, p) => sum + p!.pos.y, 0) / probes.length,
+    };
+    const bus = makeBusProbe(circuit, ids.length, at, 'dec');
+    bus.label = name;
+    made.set(bus.id, name);
+    ids.forEach((id, bit) => {
+      const probe = circuit.components.get(id);
+      if (probe?.kind !== 'probe') return;
+      const target = bus.pins[`b${bit}`]!;
+      for (const w of circuit.wires.values()) {
+        if (w.a === probe.pins.in.id) w.a = target.id;
+        if (w.b === probe.pins.in.id) w.b = target.id;
+      }
+      circuit.removeComponent(id);
+    });
+  }
+  return made;
 }
