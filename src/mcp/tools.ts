@@ -93,7 +93,7 @@ export function createTools(ws: Workspace, hooks: ToolHooks = {}): ToolDef[] {
       name: 'simulate',
       description:
         'Set inputs, run the circuit and read every probe and LED. inputs maps an input or button name to 0/1, and a bus or bus switch name to an integer ' +
-        '(on the canvas scope components are named by id; switches, clocks and other parts cannot be driven). ' +
+        '(on the canvas scope see describe for the names; switches, clocks and other parts cannot be driven). ' +
         'Probes come back by name; a probe bus is {value, bits}, with value null if any bit is floating (Z). ' +
         'State is kept between calls, so flip-flops, registers and counters remember. ' +
         'For sequential circuits pass clock (an input name) and cycles to pulse it N times and get a trace with one reading per cycle, ' +
@@ -242,7 +242,7 @@ export function createTools(ws: Workspace, hooks: ToolHooks = {}): ToolDef[] {
     {
       name: 'move',
       description:
-        'Shift components by (dx, dy) world units, for example to make room or tidy a layout. components are names (in the canvas scope: ids).',
+        'Shift components by (dx, dy) world units, for example to make room or tidy a layout. components are names as describe shows them.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -274,7 +274,8 @@ export function createTools(ws: Workspace, hooks: ToolHooks = {}): ToolDef[] {
         name: 'open_canvas',
         description:
           'Copy what the user has built on the canvas into the scope "canvas" (call it again to start over from the current canvas). ' +
-          'Components are addressed by id: use describe with scope "canvas" to see ids, types, labels and wires. ' +
+          'Use describe with scope "canvas" to see names, types, labels and wires. A probe or LED with a unique label, and an input tied to a unique net label (a circuit published earlier has them), ' +
+          'is named by it and a numbered family such as a0..a7 is a bus, so simulate can set a: 13; everything else is named by its id. ' +
           'Then edit it with build, remove and move (scope "canvas") and try it with simulate, and when it is right call apply_to_canvas. ' +
           'Nothing on the canvas changes until then.',
         inputSchema: { type: 'object', properties: {} },

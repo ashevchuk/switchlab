@@ -95,7 +95,7 @@ The agent works in a private sandbox, never on the canvas directly: it builds, s
 | `simulate` | Set inputs (on your canvas also buttons and bus switches) and read probes/LEDs; state is kept between calls; `clock` + `cycles` pulses a clock and returns one reading per cycle |
 | `begin_chip`, `finish_chip`, `test_chip`, `truth_table`, `delete_chip` | Build a reusable chip from parts, check it against cases or an exhaustive table |
 | `publish_to_canvas` | Add the circuit and its chips next to what is on the canvas |
-| `open_canvas`, `apply_to_canvas` | Copy your circuit into the sandbox, edit it there, apply only what changed |
+| `open_canvas`, `apply_to_canvas` | Copy your circuit into the sandbox, edit it there, apply only what changed. Probes, LEDs and inputs with a unique label are addressed by it, and a numbered family (`a0`..`a7`) as one bus; other parts by id |
 
 What stays safe:
 

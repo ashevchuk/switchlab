@@ -94,7 +94,8 @@ export interface ChipTestResult {
 }
 
 export interface Description {
-  components: { name: string; type: string; label?: string }[];
+  /** `id` is the canvas id, given when the component is addressed by a name taken from its label. */
+  components: { name: string; type: string; label?: string; id?: string }[];
   buses: Record<string, string[]>;
   wires: [string, string][];
 }
@@ -150,6 +151,36 @@ function snapshotCanvas(circuit: Circuit): CanvasBase {
     positions: new Map([...circuit.components.values()].map((c) => [c.id, { x: c.pos.x, y: c.pos.y }])),
     wires: new Set(circuit.wires.keys()),
   };
+}
+
+/**
+ * Names for the controls and indicators of a canvas circuit, so an agent can address `a3` or the bus `a`
+ * instead of an id: a probe or LED by its label, an input, button or bus switch by the net label tied to it
+ * (publishing puts one there) or its own label. A name that two parts share, or that equals an id, is not used.
+ */
+function canvasAliases(circuit: Circuit): Map<string, string> {
+  const owner = (pinId: string) => circuit.components.get(pinId.slice(0, pinId.indexOf(':')));
+  const wanted = new Map<string, string>();
+  for (const c of circuit.components.values()) {
+    const own = (c as { label?: string }).label;
+    if ((c.kind === 'probe' || c.kind === 'led' || c.kind === 'busswitch') && own) wanted.set(c.id, own);
+  }
+  for (const w of circuit.wires.values()) {
+    for (const [pin, other] of [[w.a, w.b], [w.b, w.a]] as const) {
+      const part = owner(pin);
+      const tie = owner(other);
+      if (part && tie?.kind === 'label' && (part.kind === 'input' || part.kind === 'button') && !wanted.has(part.id)) {
+        wanted.set(part.id, tie.name);
+      }
+    }
+  }
+  const uses = new Map<string, number>();
+  for (const name of wanted.values()) uses.set(name, (uses.get(name) ?? 0) + 1);
+  const aliases = new Map<string, string>();
+  for (const [id, name] of wanted) {
+    if (uses.get(name) === 1 && name !== '' && !name.includes('.') && !circuit.components.has(name)) aliases.set(id, name);
+  }
+  return aliases;
 }
 
 function levelChar(level: Level): string {
@@ -270,7 +301,9 @@ export class Workspace {
       for (const pin of pins) refOfPin.set(pin.id, pins.length === 1 ? name : `${name}.${pin.name}`);
       const type = comp.kind === 'chip' ? this.library.get(comp.defId).name : comp.kind === 'source' ? (comp.value === 1 ? 'vcc' : 'gnd') : comp.kind;
       const label = comp.kind === 'label' ? comp.name : (comp as { label?: string }).label;
-      components.push(label ? { name, type, label } : { name, type });
+      const entry: Description['components'][number] = label ? { name, type, label } : { name, type };
+      if (scope.canvasBase && comp.id !== name) entry.id = comp.id;
+      components.push(entry);
     }
     const wires = [...scope.circuit.wires.values()].map((w): [string, string] => [refOfPin.get(w.a) ?? w.a, refOfPin.get(w.b) ?? w.b]);
     return { components, buses: Object.fromEntries(scope.buses), wires };
@@ -300,7 +333,12 @@ export class Workspace {
     resolveStdcellInstances(copy.topCircuit, this.library);
     const scope = newScope();
     scope.circuit = copy.topCircuit;
-    for (const comp of copy.topCircuit.components.values()) scope.byName.set(comp.id, comp);
+    const aliases = canvasAliases(copy.topCircuit);
+    for (const comp of copy.topCircuit.components.values()) scope.byName.set(aliases.get(comp.id) ?? comp.id, comp);
+    for (const kinds of [['input', 'button'], ['probe', 'led']]) {
+      const names = [...scope.byName].filter(([, c]) => kinds.includes(c.kind)).map(([name]) => name);
+      for (const [bus, members] of portBuses(names)) if (!scope.byName.has(bus)) scope.buses.set(bus, members);
+    }
     scope.canvasBase = snapshotCanvas(copy.topCircuit);
     const xs = [...copy.topCircuit.components.values()].map((c) => c.pos.x);
     const ys = [...copy.topCircuit.components.values()].map((c) => c.pos.y);

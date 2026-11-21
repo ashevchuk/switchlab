@@ -5110,6 +5110,12 @@ headless run on the live circuit would disturb the running app.
   (as `applyLoadedProject` does) would break them. Added components are
   `structuredClone`d so the sandbox and the canvas never share state, and chip
   `defId`s are remapped to the canvas library (standard cells by name).
+- **Names on the canvas.** Canvas components have only ids, which made a circuit
+  the agent had published unusable by name. `canvasAliases` names a probe or LED
+  by its label and an input or button by the net label tied to it (`publish`
+  puts one there), unless the name is shared or equals an id; numbered families
+  (`a0`..`a7`, contiguous from 0) become buses. Applying works on component ids,
+  so names never reach the canvas.
 - **Undo.** `main.ts` takes an `editHistory.checkpoint` before a publish or apply
   and discards it if the call fails or changes nothing.
 
