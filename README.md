@@ -17,8 +17,7 @@
 | [`#demo=rainbow`](https://ashevchuk.github.io/switchlab/#demo=rainbow) | Soft Spectrum 48K + rainbow demo |
 | [`#demo=glazx`](https://ashevchuk.github.io/switchlab/#demo=glazx) | Soft Spectrum TAP demo (GLAZX) |
 
-> **Hosted build:** the live site is the `gh-pages` branch (a publish of `dist-file/`).  
-> Refresh it after routing/UI changes with `npm run build:dist-file` and a force-push to `gh-pages` (see [Publishing](#publishing--github-pages)).
+> **Hosted build:** the live site is built and deployed by GitHub Actions on every push to `main` (a publish of `dist-file/`; see [Publishing](#publishing--github-pages)).
 
 Offline / double-click: `npm run build:dist-file` then open `dist-file/index.html` (`file://` works; Spectrum Worker falls back to the main thread on `file://`).
 
@@ -332,7 +331,7 @@ examples/         Built-in project JSON (`#e=…`)
 stands/wire-routing/  Routing fixtures + vitest stand
 scripts/          capture-lab-help*, gen-examples, build-dist-file, …
 third_party/      Spectrum ROMs/games, CP/M disks (see READMEs)
-dist-file/        Generated static app (gitignored; published on `gh-pages`)
+dist-file/        Generated static app (gitignored; published by the Pages workflow)
 ```
 
 ---
@@ -364,22 +363,13 @@ Bundled firmware and disk images keep their upstream terms:
 
 **Live app:** https://ashevchuk.github.io/switchlab/
 
-The static build is published from the **`gh-pages`** branch (contents of `dist-file/`: `index.html`, `app.js`, `spectrum-worker.js`). Relative `base: './'` keeps assets working under the project subpath.
+The static build (`dist-file/`: `index.html`, `app.js`, `spectrum-worker.js`) is built and deployed by the **Pages** workflow (`.github/workflows/pages.yml`). Relative `base: './'` keeps assets working under the project subpath.
 
 ### Refresh the hosted build
 
-```bash
-npm run build:dist-file
-# copy dist-file/* onto an orphan/local gh-pages worktree and force-push:
-rm -rf /tmp/switchlab-gh-pages && mkdir -p /tmp/switchlab-gh-pages
-cp -a dist-file/. /tmp/switchlab-gh-pages/
-cd /tmp/switchlab-gh-pages && git init && git checkout -b gh-pages
-git add -A && git commit -m "Publish dist-file build for GitHub Pages."
-git remote add origin https://github.com/ashevchuk/switchlab.git
-git push -f origin gh-pages
-```
+Push to `main`. The workflow runs `build` (`npm ci`, `tsc --noEmit`, `npm run build:dist-file`) and `test` (the full Vitest suite), and `deploy` waits for both, so a failing test blocks the release. It can also be started by hand from the Actions tab (`workflow_dispatch`). There is no `gh-pages` branch.
 
-Repo settings: **Pages → Deploy from a branch → `gh-pages` / root**.
+Repo settings: **Pages → Build and deployment → Source: GitHub Actions**.
 
 Local parity check:
 
