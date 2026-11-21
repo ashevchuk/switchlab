@@ -43,6 +43,18 @@ describe('layoutLayered', () => {
     expect(sorted.map((c) => (c as { pins: Record<string, unknown> }).pins.cin !== undefined)).toEqual([true, true, true, true]);
   });
 
+  it('puts LEDs in the last column, like probes', () => {
+    const ws = new Workspace();
+    ws.build(MAIN_SCOPE, {
+      components: [{ name: 'a', type: 'input' }, { name: 'n', type: 'NOT' }, { name: 'lamp', type: 'led' }],
+      wires: [['a', 'n.in'], ['n.out', 'lamp']],
+    });
+    layoutLayered(ws.mainCircuit());
+    const x = (kind: Component['kind']) => [...ws.mainCircuit().components.values()].find((c) => c.kind === kind)!.pos.x;
+    expect(x('input')).toBeLessThan(x('chip'));
+    expect(x('chip')).toBeLessThan(x('led'));
+  });
+
   it('never overlaps two components', () => {
     const { circuit } = rippleAdder();
     const boxes = [...circuit.components.values()].map(box);

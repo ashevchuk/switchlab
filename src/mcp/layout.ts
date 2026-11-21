@@ -18,8 +18,12 @@ function drivesFrom(c: Component, pin: Pin): boolean {
   return false;
 }
 
+function isSink(c: Component): boolean {
+  return c.kind === 'probe' || c.kind === 'led';
+}
+
 function consumesAt(c: Component, pin: Pin): boolean {
-  if (c.kind === 'probe') return true;
+  if (isSink(c)) return true;
   if (c.kind === 'chip') return (c as ChipInstanceComponent).pinSide?.[pin.name] !== 1;
   return false;
 }
@@ -73,8 +77,8 @@ export function layoutLayered(circuit: Circuit): void {
   for (const id of [...postorder].reverse()) {
     for (const next of forward.get(id) ?? []) layer.set(next, Math.max(layer.get(next)!, layer.get(id)! + 1));
   }
-  const nonProbeMax = Math.max(0, ...comps.filter((c) => c.kind !== 'probe').map((c) => layer.get(c.id)!));
-  for (const c of comps) if (c.kind === 'probe') layer.set(c.id, nonProbeMax + 1);
+  const nonSinkMax = Math.max(0, ...comps.filter((c) => !isSink(c)).map((c) => layer.get(c.id)!));
+  for (const c of comps) if (isSink(c)) layer.set(c.id, nonSinkMax + 1);
   placeSourcesBesideConsumers(circuit, comps, layer);
 
   const minLayer = Math.min(...layer.values());

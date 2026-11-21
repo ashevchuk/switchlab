@@ -113,7 +113,7 @@ export function appendWorkspace(
 function nameNets(circuit: Circuit, names: Map<string, string>): void {
   for (const [id, name] of names) {
     const comp = circuit.components.get(id);
-    if (!comp || (comp.kind !== 'input' && comp.kind !== 'probe')) continue;
+    if (!comp || (comp.kind !== 'input' && comp.kind !== 'probe' && comp.kind !== 'led')) continue;
     const pin = comp.kind === 'input' ? comp.pins.out : comp.pins.in;
     const dx = comp.kind === 'input' ? NET_LABEL_OFFSET : -NET_LABEL_OFFSET;
     const label = makeLabel(circuit, name, { x: pin.pos.x + dx, y: pin.pos.y });
@@ -141,7 +141,7 @@ function renameClashingLabels(added: Circuit, top: Circuit): void {
 
 /** A wire between an input/probe/constant and anything else reads better as a named net than as a drawn line. */
 function isPlainIoWire(a: Component, b: Component): boolean {
-  const isIo = (c: Component) => c.kind === 'input' || c.kind === 'probe' || c.kind === 'source';
+  const isIo = (c: Component) => c.kind === 'input' || c.kind === 'probe' || c.kind === 'led' || c.kind === 'source';
   return (isIo(a) || isIo(b)) && a.kind !== 'label' && b.kind !== 'label';
 }
 

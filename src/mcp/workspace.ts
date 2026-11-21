@@ -6,6 +6,7 @@ import { deserializeProject, resolveStdcellInstances, serializeSlimStdcells } fr
 import {
   makeChipInstance,
   makeInput,
+  makeLed,
   makeProbe,
   makeSource,
   pinSidesFromDef,
@@ -27,7 +28,7 @@ const MAX_CLOCK_CYCLES = 64;
 const MAX_SEQUENCE_STEPS = 64;
 const GRID_COLUMNS = 10;
 const GRID_PITCH = { x: 220, y: 180 };
-const BUILTIN_TYPES = ['input', 'probe', 'vcc', 'gnd'] as const;
+const BUILTIN_TYPES = ['input', 'probe', 'led', 'vcc', 'gnd'] as const;
 
 export class WorkspaceError extends Error {}
 
@@ -97,6 +98,11 @@ export interface Description {
   buses: Record<string, string[]>;
   wires: [string, string][];
 }
+
+export type FinishResult = LibraryEntry & {
+  /** Pins inside the chip that are neither wired nor exposed as a port. */
+  warnings: string[];
+};
 
 export interface LibraryEntry {
   name: string;
@@ -215,7 +221,7 @@ export class Workspace {
   mainIoNames(): Map<string, string> {
     const names = new Map<string, string>();
     for (const [name, comp] of this.scope(MAIN_SCOPE).byName) {
-      if (comp.kind === 'input' || comp.kind === 'probe') names.set(comp.id, name);
+      if (comp.kind === 'input' || comp.kind === 'probe' || comp.kind === 'led') names.set(comp.id, name);
     }
     return names;
   }
@@ -368,7 +374,10 @@ export class Workspace {
       scope.circuit.endBatch();
     }
     const onlyNew = scope.canvasBase ? new Set(addedComponents) : undefined;
-    return { placed: addedComponents, wired: addedWires.length, warnings: this.unwiredChipPins(scope, onlyNew) };
+    // A chip under construction leaves its future ports unwired on purpose; finish_chip reports what is really loose.
+    const isChipDraft = scopeName !== MAIN_SCOPE && scopeName !== CANVAS_SCOPE;
+    const warnings = isChipDraft ? [] : this.unwiredChipPins(scope, onlyNew);
+    return { placed: addedComponents, wired: addedWires.length, warnings };
   }
 
   simulate(scopeName: string, inputs: Record<string, number> = {}): SimulateResult {
@@ -488,21 +497,22 @@ export class Workspace {
     names.forEach((name) => this.replacing.delete(name));
   }
 
-  finishChip(scopeName: string, ports: ChipPortSpec[]): LibraryEntry {
+  finishChip(scopeName: string, ports: ChipPortSpec[]): FinishResult {
     if (scopeName === MAIN_SCOPE) throw new WorkspaceError('main is not a chip scope; use begin_chip first');
     const scope = this.scope(scopeName);
     if (ports.length === 0) throw new WorkspaceError('a chip needs at least one port');
     const replacing = this.replacing.get(scopeName);
     if (replacing) return this.finishReplacement(scopeName, scope, ports, replacing.id);
     const exposed = this.resolveChipPorts(scope, ports);
+    const warnings = this.unwiredChipPins(scope, undefined, exposed.map((e) => e.pin));
     layoutLayered(scope.circuit);
     const def = foldExposing(scope.circuit, scopeName, this.library, exposed);
     this.scopes.delete(scopeName);
-    return { name: def.name, ports: chipPortDirs(def) };
+    return { name: def.name, ports: chipPortDirs(def), warnings };
   }
 
   /** Swaps the contents of the existing chip definition, as dive-in editing does: every instance and dependent chip follows. */
-  private finishReplacement(scopeName: string, scope: Scope, ports: ChipPortSpec[], id: string): LibraryEntry {
+  private finishReplacement(scopeName: string, scope: Scope, ports: ChipPortSpec[], id: string): FinishResult {
     const current = this.library.get(id);
     const want = chipPortDirs(current).map((p) => `${p.name}:${p.dir}`);
     const got = ports.map((p) => `${p.name}:${p.dir}`);
@@ -510,6 +520,7 @@ export class Workspace {
       throw new WorkspaceError(`a replacement must keep the chip's ports, in order. Expected: ${want.join(', ')}. Got: ${got.join(', ')}`);
     }
     const exposed = this.resolveChipPorts(scope, ports);
+    const warnings = this.unwiredChipPins(scope, undefined, exposed.map((e) => e.pin));
     layoutLayered(scope.circuit);
     const built = foldExposing(scope.circuit, scopeName, this.library, exposed);
     this.library.remove(built.id);
@@ -517,7 +528,7 @@ export class Workspace {
     current.revision = (current.revision ?? 0) + 1;
     this.library.register(current);
     this.scopes.delete(scopeName);
-    return { name: current.name, ports: chipPortDirs(current) };
+    return { name: current.name, ports: chipPortDirs(current), warnings };
   }
 
   testChip(chipName: string, cases: ChipCase[]): ChipTestResult {
@@ -644,6 +655,7 @@ export class Workspace {
       if (net !== undefined && state.contended.has(net)) warnings.push(`contention on net of ${name}`);
       levels.set(name, net === undefined ? 'Z' : (state.levelOf.get(net) ?? 'Z'));
     }
+    if (levels.size === 0) warnings.push('this scope has no probes or LEDs, so there is nothing to read: add some with build');
     return { levels, warnings };
   }
 
@@ -687,6 +699,7 @@ export class Workspace {
     switch (type) {
       case 'input': comp = makeInput(scope.circuit, 0, pos); break;
       case 'probe': comp = makeProbe(scope.circuit, pos, name); break;
+      case 'led': comp = makeLed(scope.circuit, pos, name); break;
       case 'vcc': comp = makeSource(scope.circuit, 1, pos); break;
       case 'gnd': comp = makeSource(scope.circuit, 0, pos); break;
       default: {
@@ -778,8 +791,8 @@ export class Workspace {
     }
   }
 
-  private unwiredChipPins(scope: Scope, only?: Set<string>): string[] {
-    const wired = new Set<string>();
+  private unwiredChipPins(scope: Scope, only?: Set<string>, exposed: Pin[] = []): string[] {
+    const wired = new Set<string>(exposed.map((p) => p.id));
     for (const w of scope.circuit.wires.values()) {
       wired.add(w.a);
       wired.add(w.b);
@@ -787,7 +800,7 @@ export class Workspace {
     const warnings: string[] = [];
     for (const [name, comp] of scope.byName) {
       if (only && !only.has(name)) continue;
-      if (comp.kind !== 'chip' && comp.kind !== 'probe') continue;
+      if (comp.kind !== 'chip' && comp.kind !== 'probe' && comp.kind !== 'led') continue;
       for (const pin of Object.values(comp.pins as Record<string, Pin>)) {
         if (!wired.has(pin.id)) warnings.push(`${comp.kind === 'chip' ? `${name}.${pin.name}` : name} is not connected`);
       }

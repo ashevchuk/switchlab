@@ -1,5 +1,5 @@
 import { MAIN_SCOPE, Workspace } from './workspace.js';
-import type { BuildSpec, ChipCase, ChipPortSpec, RemoveSpec } from './workspace.js';
+import type { BuildSpec, ChipCase, ChipPortSpec, LibraryEntry, RemoveSpec } from './workspace.js';
 
 export interface ToolAnnotations {
   readOnlyHint?: boolean;
@@ -22,6 +22,12 @@ export interface ToolHooks {
     open(workspace: Workspace): { components: number; wires: number };
     apply(workspace: Workspace): Record<string, unknown>;
   };
+}
+
+/** Ports as "name:dir" strings: the library is listed on every task, so its size is paid for each time. */
+function compactEntry(entry: LibraryEntry) {
+  const { ports, ...rest } = entry;
+  return { ...rest, ports: ports.map((p) => `${p.name}:${p.dir}`) };
 }
 
 const SCOPE_PROP = {
@@ -49,17 +55,17 @@ export function createTools(ws: Workspace, hooks: ToolHooks = {}): ToolDef[] {
     {
       name: 'list_library',
       description:
-        'List every placeable chip with its ports and directions (in/out): built-in cells, chips you finished earlier, and chips the user already has on the canvas (origin "canvas"; use them like any other chip). ' +
-        'outOfDate means the canvas copy changed since it was imported: delete_chip it and call list_library again. Built-in non-chip types: input, probe, vcc, gnd.',
+        'List every placeable chip with its ports as "name:dir" (in/out): built-in cells, chips you finished earlier, and chips the user already has on the canvas (origin "canvas"; use them like any other chip). ' +
+        'outOfDate means the canvas copy changed since it was imported: delete_chip it and call list_library again. Built-in non-chip types: input, probe (read value, shown in the watch strip), led (a visible indicator), vcc, gnd.',
       inputSchema: { type: 'object', properties: {} },
       annotations: { readOnlyHint: true },
-      run: () => ({ chips: ws.listLibrary() }),
+      run: () => ({ chips: ws.listLibrary().map(compactEntry) }),
     },
     {
       name: 'build',
       description:
         `Add components and wires in one atomic call: if anything is invalid nothing is added and the error says what to fix. ` +
-        `Components: {name, type, count?}; type is a built-in (input, probe, vcc, gnd) or a chip name from list_library. ` +
+        `Components: {name, type, count?}; type is a built-in (input, probe, led, vcc, gnd) or a chip name from list_library. ` +
         `count=N creates name0..name{N-1} and registers "name" as an N-bit bus (bit 0 = LSB) usable in simulate. ` +
         `${PIN_REF_HELP} ` +
         `Wires are lists of pin references [a, b, ...]: a is wired to every other entry. ` +
@@ -86,7 +92,7 @@ export function createTools(ws: Workspace, hooks: ToolHooks = {}): ToolDef[] {
     {
       name: 'simulate',
       description:
-        'Set inputs, run the circuit and read every probe. inputs maps an input name to 0/1, or a bus name to an integer. ' +
+        'Set inputs, run the circuit and read every probe and LED. inputs maps an input name to 0/1, or a bus name to an integer. ' +
         'Probes come back by name; a probe bus is {value, bits}, with value null if any bit is floating (Z). ' +
         'State is kept between calls, so flip-flops, registers and counters remember. ' +
         'For sequential circuits pass clock (an input name) and cycles to pulse it N times and get a trace with one reading per cycle, ' +
@@ -163,7 +169,10 @@ export function createTools(ws: Workspace, hooks: ToolHooks = {}): ToolDef[] {
         },
         required: ['scope', 'ports'],
       },
-      run: (args) => ({ chip: ws.finishChip(str(args, 'scope'), args.ports as ChipPortSpec[]) }),
+      run: (args) => {
+        const { warnings, ...entry } = ws.finishChip(str(args, 'scope'), args.ports as ChipPortSpec[]);
+        return { chip: compactEntry(entry), warnings };
+      },
     },
     {
       name: 'test_chip',

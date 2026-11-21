@@ -148,3 +148,45 @@ describe('truth tables and editing', () => {
     expect(() => ws.deleteChip('AND')).toThrow(/built-in/);
   });
 });
+
+describe('feedback aimed at an agent', () => {
+  it('does not warn about unwired pins while a chip is being built, but reports loose ones at finish_chip', () => {
+    const ws = new Workspace();
+    ws.beginChip('HALF');
+    const built = ws.build('HALF', { components: [{ name: 'x', type: 'XOR' }, { name: 'n', type: 'AND' }], wires: [['x.a', 'n.a']] });
+    expect(built.warnings).toEqual([]);
+    const finished = ws.finishChip('HALF', [
+      { name: 'a', dir: 'in', pin: ['x.a', 'n.a'] },
+      { name: 'b', dir: 'in', pin: 'x.b' },
+      { name: 's', dir: 'out', pin: 'x.out' },
+    ]);
+    expect(finished.warnings).toEqual(['n.b is not connected', 'n.out is not connected']);
+  });
+
+  it('reports nothing at finish_chip when every pin is wired or exposed', () => {
+    const ws = new Workspace();
+    ws.beginChip('INV');
+    ws.build('INV', { components: [{ name: 'n', type: 'NOT' }] });
+    expect(ws.finishChip('INV', [{ name: 'in', dir: 'in', pin: 'n.in' }, { name: 'out', dir: 'out', pin: 'n.out' }]).warnings).toEqual([]);
+  });
+
+  it('tells the agent when there is nothing to read', () => {
+    const ws = new Workspace();
+    ws.build(MAIN_SCOPE, { components: [{ name: 'a', type: 'input' }] });
+    expect(ws.simulate(MAIN_SCOPE, { a: 1 })).toEqual({
+      outputs: {},
+      warnings: ['this scope has no probes or LEDs, so there is nothing to read: add some with build'],
+    });
+  });
+
+  it('places LEDs and reads them like probes', () => {
+    const ws = new Workspace();
+    ws.build(MAIN_SCOPE, {
+      components: [{ name: 'a', type: 'input' }, { name: 'n', type: 'NOT' }, { name: 'lamp', type: 'led' }],
+      wires: [['a', 'n.in'], ['n.out', 'lamp']],
+    });
+    expect(ws.simulate(MAIN_SCOPE, { a: 0 })).toEqual({ outputs: { lamp: 1 }, warnings: [] });
+    expect(ws.describe(MAIN_SCOPE).components).toContainEqual({ name: 'lamp', type: 'led', label: 'lamp' });
+  });
+});
+

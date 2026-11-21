@@ -88,7 +88,7 @@ describe('Workspace: building and simulating', () => {
   it('names the available types for an unknown component type', () => {
     const ws = new Workspace();
     expect(() => ws.build(MAIN_SCOPE, { components: [{ name: 'g', type: 'WIDGET' }] })).toThrow(
-      /unknown type "WIDGET".*input, probe, vcc, gnd.*AND/,
+      /unknown type "WIDGET".*input, probe, led, vcc, gnd.*AND/,
     );
   });
 

@@ -78,6 +78,19 @@ describe('MCP tools', () => {
     ).toMatchObject({ ok: true, passed: 2, total: 2, failures: [] });
   });
 
+  it('lists ports as compact name:dir strings and returns finish_chip warnings', () => {
+    const { call } = toolsByName();
+    const listed = call('list_library') as unknown as { chips: { name: string; ports: string[] }[] };
+    expect(listed.chips.find((c) => c.name === 'AND')?.ports).toEqual(['a:in', 'b:in', 'out:out']);
+    call('begin_chip', { name: 'BUF' });
+    call('build', { scope: 'BUF', components: [{ name: 'g', type: 'AND' }] });
+    expect(call('finish_chip', { scope: 'BUF', ports: [{ name: 'a', dir: 'in', pin: 'g.a' }, { name: 'out', dir: 'out', pin: 'g.out' }] })).toEqual({
+      ok: true,
+      chip: { name: 'BUF', ports: ['a:in', 'out:out'] },
+      warnings: ['g.b is not connected'],
+    });
+  });
+
   it('exposes sequential simulation, truth tables and editing', () => {
     const { call } = toolsByName();
     expect(call('truth_table', { name: 'AND' })).toMatchObject({
