@@ -406,7 +406,8 @@ export class Workspace {
     if (!Number.isInteger(cycles) || cycles < 1 || cycles > MAX_CLOCK_CYCLES) {
       throw new WorkspaceError(`cycles must be an integer 1..${MAX_CLOCK_CYCLES}`);
     }
-    if (scope.byName.get(clock)?.kind !== 'input') throw new WorkspaceError(`"${clock}" is not an input`);
+    const clockKind = scope.byName.get(clock)?.kind;
+    if (clockKind !== 'input' && clockKind !== 'button') throw new WorkspaceError(`"${clock}" is not an input or a button`);
     this.readProbes(scope, { ...inputs, [clock]: 0 });
     const warnings = new Set<string>();
     const trace: Record<string, Reading>[] = [];
@@ -776,11 +777,20 @@ export class Workspace {
   private applyInputs(scope: Scope, inputs: Record<string, number>): void {
     const setBit = (name: string, bit: 0 | 1) => {
       const comp = scope.byName.get(name);
-      if (!comp || comp.kind !== 'input') throw new WorkspaceError(`"${name}" is not an input`);
+      if (!comp || (comp.kind !== 'input' && comp.kind !== 'button')) throw new WorkspaceError(`"${name}" is not an input or a button`);
       comp.value = bit;
     };
     for (const [key, value] of Object.entries(inputs)) {
       const members = scope.buses.get(key);
+      const single = scope.byName.get(key);
+      if (!members && single?.kind === 'busswitch') {
+        const limit = 2 ** single.bitWidth;
+        if (!Number.isInteger(value) || value < 0 || value >= limit) {
+          throw new WorkspaceError(`bus switch "${key}" takes an integer 0..${limit - 1}`);
+        }
+        single.value = value;
+        continue;
+      }
       if (!members) {
         if (value !== 0 && value !== 1) throw new WorkspaceError(`input "${key}" takes 0 or 1`);
         setBit(key, value);

@@ -92,7 +92,8 @@ export function createTools(ws: Workspace, hooks: ToolHooks = {}): ToolDef[] {
     {
       name: 'simulate',
       description:
-        'Set inputs, run the circuit and read every probe and LED. inputs maps an input name to 0/1, or a bus name to an integer. ' +
+        'Set inputs, run the circuit and read every probe and LED. inputs maps an input or button name to 0/1, and a bus or bus switch name to an integer ' +
+        '(on the canvas scope components are named by id; switches, clocks and other parts cannot be driven). ' +
         'Probes come back by name; a probe bus is {value, bits}, with value null if any bit is floating (Z). ' +
         'State is kept between calls, so flip-flops, registers and counters remember. ' +
         'For sequential circuits pass clock (an input name) and cycles to pulse it N times and get a trace with one reading per cycle, ' +

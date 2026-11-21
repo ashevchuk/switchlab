@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ChipLibrary } from '../src/sim/ChipLibrary.js';
 import { Circuit } from '../src/sim/Circuit.js';
 import { flatten } from '../src/sim/hierarchy.js';
-import { makeChipInstance, makeInput, makeProbe, wire } from '../src/sim/library.js';
+import { makeBusSwitch, makeButton, makeChipInstance, makeInput, makeLed, makeProbe, wire } from '../src/sim/library.js';
 import { initialState, step } from '../src/sim/solver.js';
 import { seedStandardCells } from '../src/sim/stdcells.js';
 import { applyCanvasEdits } from '../src/mcp/publish.js';
@@ -156,5 +156,50 @@ describe('editing the canvas', () => {
     const { library, top } = userCanvas();
     expect(() => applyCanvasEdits(top, library, new Workspace(() => library))).toThrow(/call open_canvas first/);
     expect(() => new Workspace().openCanvas(top)).toThrow(/no canvas is attached/);
+  });
+});
+
+describe('driving the controls of the user circuit', () => {
+  it('presses a button that lives on the canvas, in the sandbox only', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+    const top = new Circuit();
+    const button = makeButton(top, { x: 0, y: 0 }, 'toggle');
+    const inv = makeChipInstance(top, library.findByName('NOT')!, { x: 200, y: 0 });
+    const probe = makeProbe(top, { x: 400, y: 0 }, 'result');
+    wire(top, button.pins.out, inv.pins.in!);
+    wire(top, inv.pins.out!, probe.pins.in);
+    const ws = new Workspace(() => library);
+    ws.openCanvas(top);
+
+    expect(ws.simulate(CANVAS_SCOPE, { [button.id]: 0 }).outputs[probe.id]).toBe(1);
+    expect(ws.simulate(CANVAS_SCOPE, { [button.id]: 1 }).outputs[probe.id]).toBe(0);
+    expect(button.value).toBe(0);
+    expect(ws.simulateClock(CANVAS_SCOPE, button.id, 2).trace).toHaveLength(2);
+  });
+
+  it('sets a bus switch to an integer and rejects a value that does not fit', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+    const top = new Circuit();
+    const bus = makeBusSwitch(top, 4, { x: 0, y: 0 });
+    const probes = [0, 1, 2, 3].map((i) => makeProbe(top, { x: 300, y: i * 40 }, `p${i}`));
+    probes.forEach((p, i) => wire(top, bus.pins[`b${i}`]!, p.pins.in));
+    const ws = new Workspace(() => library);
+    ws.openCanvas(top);
+
+    const readings = ws.simulate(CANVAS_SCOPE, { [bus.id]: 9 }).outputs;
+    expect(probes.map((p) => readings[p.id])).toEqual([1, 0, 0, 1]);
+    expect(() => ws.simulate(CANVAS_SCOPE, { [bus.id]: 16 })).toThrow(/bus switch ".*" takes an integer 0\.\.15/);
+  });
+
+  it('says which parts can be driven when asked to set something else', () => {
+    const library = new ChipLibrary();
+    seedStandardCells(library);
+    const top = new Circuit();
+    const lamp = makeLed(top, { x: 0, y: 0 }, 'lamp');
+    const ws = new Workspace(() => library);
+    ws.openCanvas(top);
+    expect(() => ws.simulate(CANVAS_SCOPE, { [lamp.id]: 1 })).toThrow(`"${lamp.id}" is not an input or a button`);
   });
 });
