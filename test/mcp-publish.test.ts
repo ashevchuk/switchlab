@@ -104,7 +104,9 @@ describe('appendWorkspace', () => {
     authorNandViaAnd(ws);
     appendWorkspace(top, library, ws);
     const labels = [...top.components.values()].filter((c) => c.kind === 'label').map((c) => (c as { name: string }).name);
-    expect(labels).toEqual(expect.arrayContaining(['x', 'y', 'q']));
+    expect(labels).toEqual(expect.arrayContaining(['x', 'y']));
+    expect(labels).not.toContain('q');
+    expect([...top.components.values()].some((c) => c.kind === 'probe' && c.label === 'q')).toBe(true);
   });
 
   it('keeps two publishes that reuse the same names electrically separate', () => {

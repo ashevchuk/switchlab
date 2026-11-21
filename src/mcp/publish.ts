@@ -1,6 +1,6 @@
 import type { ChipLibrary } from '../sim/ChipLibrary.js';
 import { Circuit } from '../sim/Circuit.js';
-import type { Component, Wire } from '../sim/types.js';
+import type { Component, Pin, Wire } from '../sim/types.js';
 import type { ChipDef } from '../sim/ChipLibrary.js';
 import { deserializeProject, resolveStdcellInstances, serializeSlimStdcells } from '../sim/serialize.js';
 import { replaceLongWiresWithLabels } from '../sim/labelWires.js';
@@ -21,6 +21,8 @@ export interface Bounds {
 }
 /** Between one column step (about 180-260 units) and two (about 430+): wires reaching past the next column become labels. */
 const LABEL_WIRES_LONGER_THAN = 320;
+const STUB_GAP = 12;
+const LABEL_CHAR_WIDTH = 7;
 
 export interface PublishResult {
   placedComponents: number;
@@ -86,7 +88,7 @@ export function appendWorkspace(
     const busProbes = replaceProbeBuses(loaded.topCircuit, workspace.mainProbeBuses());
     layoutLayered(loaded.topCircuit);
     const netNames = namesOfIoNets(loaded.topCircuit, workspace.mainIoNames(), busProbes);
-    replaceLongWiresWithLabels(loaded.topCircuit, LABEL_WIRES_LONGER_THAN, isPlainIoWire, netNames);
+    replaceLongWiresWithLabels(loaded.topCircuit, LABEL_WIRES_LONGER_THAN, { alsoLabel: isPlainIoWire, preferredNames: netNames, stubPos: stubOutsideBody });
     renameClashingLabels(loaded.topCircuit, top);
 
     const existing = [...top.components.values()];
@@ -146,10 +148,22 @@ function renameClashingLabels(added: Circuit, top: Circuit): void {
   }
 }
 
-/** A wire between an input/probe/constant and anything else reads better as a named net than as a drawn line. */
+/**
+ * A wire from an input, a constant or a bus probe reads better as a named net than as a drawn line. A probe or LED
+ * is left out: it shows its own label, so a net label beside it would be the same name twice.
+ */
 function isPlainIoWire(a: Component, b: Component): boolean {
-  const isIo = (c: Component) => c.kind === 'input' || c.kind === 'probe' || c.kind === 'led' || c.kind === 'busprobe' || c.kind === 'source';
-  return (isIo(a) || isIo(b)) && a.kind !== 'label' && b.kind !== 'label';
+  const named = (c: Component) => c.kind === 'input' || c.kind === 'busprobe' || c.kind === 'source';
+  return (named(a) || named(b)) && a.kind !== 'label' && b.kind !== 'label';
+}
+
+/**
+ * A pin on the left of a chip or bus probe has its stub label put to the left, clear of the port names drawn inside
+ * the body. The label is drawn above its point and to the right of it, so it is moved back by its text width.
+ */
+function stubOutsideBody(pin: Pin, owner: Component, name: string): { x: number; y: number } | undefined {
+  if ((owner.kind !== 'chip' && owner.kind !== 'busprobe') || pin.pos.x >= owner.pos.x) return undefined;
+  return { x: pin.pos.x - STUB_GAP - name.length * LABEL_CHAR_WIDTH, y: pin.pos.y };
 }
 
 function boundsOf(circuit: Circuit): Bounds {

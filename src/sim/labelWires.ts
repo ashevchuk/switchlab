@@ -27,15 +27,24 @@ function stubLabelPos(pin: Pin): { x: number; y: number } {
 
 /**
  * Convert every wire of length >= `minLength` into local same-named labels.
- * `alsoLabel` additionally selects shorter wires by their two end components.
- * `preferredNames` (pin id to name) names a net that has no label yet.
  * Returns how many wires were removed.
+ */
+export interface LabelWireOptions {
+  /** Also label shorter wires, chosen by their two end components. */
+  alsoLabel?: (a: Component, b: Component) => boolean;
+  /** Names a net that has no label yet, by pin id. */
+  preferredNames?: ReadonlyMap<string, string>;
+  /** Where the stub label for `name` at `pin` of `owner` goes; the default is just right of the pin. */
+  stubPos?: (pin: Pin, owner: Component, name: string) => { x: number; y: number } | undefined;
+}
+
+/**
+ * Convert every wire of length >= `minLength` into local same-named labels.
  */
 export function replaceLongWiresWithLabels(
   circuit: Circuit,
   minLength = LONG_WIRE_LABEL_THRESHOLD,
-  alsoLabel?: (a: Component, b: Component) => boolean,
-  preferredNames?: ReadonlyMap<string, string>,
+  { alsoLabel, preferredNames, stubPos }: LabelWireOptions = {},
 ): number {
   const pinOf = new Map<string, Pin>();
   const ownerOf = new Map<string, Component>();
@@ -118,14 +127,14 @@ export function replaceLongWiresWithLabels(
     // Local stub on each end that isn't already this net's label pin.
     // (A far same-named label is the other presence — don't wire to it.)
     if (!(oa.kind === 'label' && oa.name === name)) {
-      const lbl = makeLabel(circuit, name, stubLabelPos(a));
+      const lbl = makeLabel(circuit, name, stubPos?.(a, oa, name) ?? stubLabelPos(a));
       wire(circuit, a, lbl.pins.net);
       pinOf.set(lbl.pins.net.id, lbl.pins.net);
       ownerOf.set(lbl.pins.net.id, lbl);
       union(a.id, lbl.pins.net.id);
     }
     if (!(ob.kind === 'label' && ob.name === name)) {
-      const lbl = makeLabel(circuit, name, stubLabelPos(b));
+      const lbl = makeLabel(circuit, name, stubPos?.(b, ob, name) ?? stubLabelPos(b));
       wire(circuit, b, lbl.pins.net);
       pinOf.set(lbl.pins.net.id, lbl.pins.net);
       ownerOf.set(lbl.pins.net.id, lbl);
