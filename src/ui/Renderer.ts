@@ -1614,7 +1614,7 @@ function drawComponent(
         ctx.fillText(passName, x + w / 2 + 6, y);
         ctx.textAlign = 'center';
       } else {
-        ctx.fillText(passName, x, y - h / 2 + 10);
+        ctx.fillText(passName, x, y - h / 2 - 8);
       }
       for (let i = 0; i < n; i++) {
         const pa = c.pins[`a${i}`];
