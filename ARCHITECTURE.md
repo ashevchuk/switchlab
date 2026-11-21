@@ -5059,6 +5059,65 @@ section's own success story.
   labels, not wire spaghetti" above. Cleaning unused `vcc`/`gnd`
   parameters off the builder signatures is separate cosmetic work.
 
+## WebMCP agent tools
+
+`src/mcp/` exposes the editor to an agent through WebMCP. `register.ts` looks
+for `document.modelContext` (older drafts used `navigator.modelContext`) and
+registers the tools from `tools.ts`; with neither present nothing happens.
+`executeTool` returns the result as a JSON string; the spec takes the arguments
+as an object, while Chromium 153 behind the flag took a JSON string. The browser
+does **not** check the arguments against `inputSchema`, so `runTool`
+validates them itself (`validateArgs` covers exactly the schema keywords the
+tools use) and returns every failure as `{ok:false, error}` rather than throwing.
+
+**The agent never edits the canvas directly.** `workspace.ts` holds named scopes
+in a private `ChipLibrary` seeded with the standard cells: `main` (the circuit
+being built), one scope per chip under construction, and `canvas` (a copy of the
+user's circuit). The canvas must not be simulated in place: `flatten()` caches
+per circuit and Soft Lab state lives on the flattened chip instances, so a
+headless run on the live circuit would disturb the running app.
+
+- **Simulation.** Each scope keeps its `SimState`. A call runs at least four
+  ticks, because Soft Lab flip-flops and counters take their clock edge one tick
+  before their outputs change; one tick would read the previous state. `reset`
+  clears the state and the soft state. An undriven feedback loop settles at `Z`
+  (it does not oscillate), so the "did not settle" error is only reachable with
+  genuinely driven loops and has no test.
+- **Chips from the canvas** are copied into the workspace library with the
+  **same ids** (slim serialisation, then `resolveStdcellInstances` rebinds the
+  standard cells by name). Identical ids are what let a published circuit refer to
+  the canvas definition instead of a copy. A canvas chip whose `revision` differs
+  from the workspace copy is reported as `outOfDate`, and publishing refuses.
+- **`publish_to_canvas`** (`publish.ts`) lays the circuit out by signal flow
+  (`layout.ts`: longest-path layers with feedback edges ignored, then barycentre
+  ordering), ties each named input, probe and LED to a net label, turns wires that
+  touch an input, probe, LED or constant, or that reach past the next column, into
+  labels (`replaceLongWiresWithLabels` with its `alsoLabel` predicate), and
+  appends to the right of the existing content. All checks run before anything is
+  mutated.
+- **Labels are global.** Labels with one name are one net across the whole
+  circuit, so a second publish that reused `a0` or an automatic `_N0` would short
+  into the first. `renameClashingLabels` renames the new ones.
+- **In-place chip replacement.** `begin_chip` with `replace` keeps the existing
+  definition in the library; `finish_chip` requires the same ports in the same
+  order and swaps `def.circuit` and bumps `revision`, as dive-in editing does, so
+  dependents in the workspace follow. Publishing with `replace` first checks the
+  canvas revision is still the one the replacement started from.
+- **Editing the canvas.** `open_canvas` stores a baseline (positions and wire ids).
+  `apply_to_canvas` applies only the difference and refuses if the canvas no longer
+  equals the baseline. Components the diff does not touch stay the same objects:
+  RAM contents and machine links are held by reference and a wholesale replace
+  (as `applyLoadedProject` does) would break them. Added components are
+  `structuredClone`d so the sandbox and the canvas never share state, and chip
+  `defId`s are remapped to the canvas library (standard cells by name).
+- **Undo.** `main.ts` takes an `editHistory.checkpoint` before a publish or apply
+  and discards it if the call fails or changes nothing.
+
+Tests: `test/mcp-*.test.ts` (workspace, tools, layout, publish, canvas chips,
+replacement, canvas editing); `test/e2e/webmcp.spec.ts` drives the tools through a
+stand-in `modelContext`, `test/e2e/webmcp-real.spec.ts` through the browser's own
+(`getTools` / `executeTool`) and skips when the Chromium build has none.
+
 ## Running it
 
 ```

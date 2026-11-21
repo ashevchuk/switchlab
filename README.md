@@ -32,13 +32,14 @@ Offline / double-click: `npm run build:dist-file` then open `dist-file/index.htm
 4. [Editor basics](#editor-basics)
 5. [Soft Lab](#soft-lab)
 6. [Simulation](#simulation)
-7. [Soft Z80 / Spectrum](#soft-z80--spectrum)
-8. [Examples & share links](#examples--share-links)
-9. [Scripts](#scripts)
-10. [Repository layout](#repository-layout)
-11. [Docs map](#docs-map)
-12. [Third-party / licenses](#third-party--licenses)
-13. [Publishing / GitHub Pages](#publishing--github-pages)
+7. [AI agents (WebMCP)](#ai-agents-webmcp)
+8. [Soft Z80 / Spectrum](#soft-z80--spectrum)
+9. [Examples & share links](#examples--share-links)
+10. [Scripts](#scripts)
+11. [Repository layout](#repository-layout)
+12. [Docs map](#docs-map)
+13. [Third-party / licenses](#third-party--licenses)
+14. [Publishing / GitHub Pages](#publishing--github-pages)
 
 ---
 
@@ -260,6 +261,12 @@ Toolbar **Soft Lab** (default **on**) evaluates Pack A/B labcells (and nested 74
 
 ---
 
+## AI agents (WebMCP)
+
+In a browser that exposes [WebMCP](https://webmachinelearning.github.io/webmcp/) (`document.modelContext`, behind a flag in current Chromium), the page registers tools for an agent: build circuits from parts in a private sandbox, simulate them, author and test reusable chips, then publish them to the canvas or edit the circuit you already built. Publishing only adds, edits apply only the difference, and Ctrl+Z takes either back. See **[USER.md](./USER.md#ai-agents-webmcp)** for the tools and what stays safe, and [ARCHITECTURE.md](./ARCHITECTURE.md#webmcp-agent-tools) for how it works.
+
+---
+
 ## Soft Z80 / Spectrum
 
 **Place → Spectrum 48K… / 128K…** drops soft CPU + RAM, opens the machine panel, and boots soft Spectrum.
@@ -319,6 +326,7 @@ HELP_BASE=http://127.0.0.1:4173 npx vite-node scripts/capture-lab-help-deep.mts
 src/sim/          Simulation core (Circuit, solver, library, hierarchy, Soft Lab)
 src/ui/           Editor, Renderer, instruments, Lab manual, Inspector
 src/machine/      Soft Z80 / Spectrum / CP/M runners + Worker host
+src/mcp/          WebMCP agent tools (sandbox workspace, tools, layout, publish)
 src/assets/help/  Lab-manual screenshots (used in README + in-app manual)
 examples/         Built-in project JSON (`#e=…`)
 stands/wire-routing/  Routing fixtures + vitest stand

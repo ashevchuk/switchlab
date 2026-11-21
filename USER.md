@@ -82,6 +82,31 @@ Or place a **Z80CPU** with **addrBits=16** (64K RAM), open the TTY panel, Soft s
 - Flash-load trap enables interrupts on exit (EI+RET). Hold a key briefly on PAUSE if a quick tap seems ignored.
 - Also: Boot BASIC / CP/M / soft stub from the same panel.
 
+## AI agents (WebMCP)
+
+When the browser exposes WebMCP (`document.modelContext`), SwitchLab registers tools an agent can call, so a prompt such as "build an 8-bit multiplier" produces a verified circuit on the canvas. Without WebMCP nothing changes. At the time of writing it is behind a feature flag in Chromium builds (for example `--enable-features=WebMCP`); the page must be a secure context (`https:`, `localhost` or `file:`).
+
+The agent works in a private sandbox, never on the canvas directly: it builds, simulates and tests there, and only then shows the result.
+
+| Tools | What they do |
+|-------|--------------|
+| `list_library`, `describe` | Chips available (built-in, yours on the canvas, ones it built) and what a circuit contains |
+| `build`, `remove`, `move`, `clear` | Add components and wires (buses wire in one entry), delete, shift, empty a scope. A failed `build` changes nothing |
+| `simulate` | Set inputs and read probes/LEDs; state is kept between calls; `clock` + `cycles` pulses a clock and returns one reading per cycle |
+| `begin_chip`, `finish_chip`, `test_chip`, `truth_table`, `delete_chip` | Build a reusable chip from parts, check it against cases or an exhaustive table |
+| `publish_to_canvas` | Add the circuit and its chips next to what is on the canvas |
+| `open_canvas`, `apply_to_canvas` | Copy your circuit into the sandbox, edit it there, apply only what changed |
+
+What stays safe:
+
+- **Nothing changes on the canvas until `publish_to_canvas` or `apply_to_canvas`.** Publishing only adds, to the right of everything already there, and fits the view to the new block.
+- **`apply_to_canvas` applies only the difference.** Parts the agent did not touch, including RAM contents and machine links, stay exactly as they are. If you changed the canvas after `open_canvas`, it refuses and applies nothing.
+- **Ctrl+Z undoes a publish or an apply in one step.**
+- **Your chips are usable.** Chips on the canvas are shared with the agent, not copied. It can rebuild one in place (`begin_chip` with `replace`, then `publish_to_canvas` with `replace`): the ports must stay the same, and every instance and every chip built on it follows. The instances then show the usual "edited" marker.
+- Nets in a published circuit are named after the agent's inputs and probes; a name already used by a label on the canvas is renamed (`a0` becomes `a0_2`), because labels with one name are one net.
+
+Limits: the agent cannot change the type, label or value of an existing component, new parts are placed in a block to the right of the canvas rather than next to what they connect to, and the sandbox is lost when the page reloads (chips and published circuits are on the canvas, so they stay).
+
 ## Help
 
 - **Help → Lab manual…** — full Soft Lab + Spectrum guide with screenshots (Logic analyzer, Load images, demos, tape, pad, debug). Update it when features change (`src/ui/LabManual.ts` + `src/assets/help/` + `scripts/capture-lab-help*.mts`).
