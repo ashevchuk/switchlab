@@ -81,7 +81,7 @@ import { makeSoftCanvasResolve } from './ui/softCanvasResolve.js';
 import { chipBoxSize, isOrientable, memoryBoxSize, orientSelection } from './sim/orientation.js';
 import { describeError, describeWorkerRecovery, isBrowserNoise, type ErrorSource } from './ui/errorReport.js';
 import { showErrorToast } from './ui/Toast.js';
-import { appendWorkspace } from './mcp/publish.js';
+import { appendWorkspace, applyCanvasEdits } from './mcp/publish.js';
 import { registerWebMcpTools } from './mcp/register.js';
 import { createTools } from './mcp/tools.js';
 import { Workspace } from './mcp/workspace.js';
@@ -398,15 +398,34 @@ editor.onCancelEdit = () => editHistory.discardLast(editor.circuit);
 const mcpWorkspace = new Workspace(() => library);
 registerWebMcpTools(
   createTools(mcpWorkspace, {
-    publishToCanvas: (ws) => {
+    canvas: {
+      open: (ws) => ws.openCanvas(topCircuit),
+      apply: (ws) => {
+        editHistory.checkpoint(topCircuit);
+        try {
+          const { bounds, ...summary } = applyCanvasEdits(topCircuit, library, ws);
+          const changed = summary.addedComponents + summary.removedComponents + summary.movedComponents + summary.addedWires + summary.removedWires;
+          if (changed === 0) editHistory.discardLast(topCircuit);
+          if (editor.circuit !== topCircuit) resetEditorToTop();
+          if (bounds) camera.fit(bounds, vw(), vh());
+          uiDirty = true;
+          autosave.schedule();
+          return summary;
+        } catch (e) {
+          editHistory.discardLast(topCircuit);
+          throw e;
+        }
+      },
+    },
+    publishToCanvas: (ws, options) => {
       editHistory.checkpoint(topCircuit);
       try {
-        const { placedComponents, chips, bounds } = appendWorkspace(topCircuit, library, ws);
+        const { placedComponents, chips, replaced, bounds } = appendWorkspace(topCircuit, library, ws, options);
         if (editor.circuit !== topCircuit) resetEditorToTop();
-        camera.fit(bounds, vw(), vh());
+        if (bounds) camera.fit(bounds, vw(), vh());
         uiDirty = true;
         autosave.schedule();
-        return { placedComponents, chips };
+        return { placedComponents, chips, replaced };
       } catch (e) {
         editHistory.discardLast(topCircuit);
         throw e;

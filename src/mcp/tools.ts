@@ -16,7 +16,12 @@ export interface ToolDef {
 
 export interface ToolHooks {
   /** Copies a workspace circuit onto the user's canvas without removing anything there. */
-  publishToCanvas?(workspace: Workspace): { placedComponents: number; chips: string[] };
+  publishToCanvas?(workspace: Workspace, options: { replace?: string[] }): { placedComponents: number; chips: string[]; replaced: string[] };
+  /** Copies the user's canvas into the "canvas" scope, and later applies only what was edited there. */
+  canvas?: {
+    open(workspace: Workspace): { components: number; wires: number };
+    apply(workspace: Workspace): Record<string, unknown>;
+  };
 }
 
 const SCOPE_PROP = {
@@ -119,11 +124,17 @@ export function createTools(ws: Workspace, hooks: ToolHooks = {}): ToolDef[] {
       name: 'begin_chip',
       description:
         'Start a new reusable chip. Creates an empty scope named after the chip; build its guts there with build(scope=name), ' +
-        'then call finish_chip. Do not add inputs/probes inside: the chip ports are chosen at finish_chip.',
-      inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+        'then call finish_chip. Do not add inputs/probes inside: the chip ports are chosen at finish_chip. ' +
+        'To rebuild a chip that already lives on the canvas (origin "canvas"), pass replace: true: finish_chip must then keep exactly the same ports, ' +
+        'and publish_to_canvas with replace: [name] updates the canvas chip in place so every instance and every chip built on it follows.',
+      inputSchema: {
+        type: 'object',
+        properties: { name: { type: 'string' }, replace: { type: 'boolean' } },
+        required: ['name'],
+      },
       run: (args) => {
         const name = str(args, 'name');
-        ws.beginChip(name);
+        ws.beginChip(name, args.replace === true);
         return { scope: name };
       },
     },
@@ -219,8 +230,25 @@ export function createTools(ws: Workspace, hooks: ToolHooks = {}): ToolDef[] {
       },
     },
     {
+      name: 'move',
+      description:
+        'Shift components by (dx, dy) world units, for example to make room or tidy a layout. components are names (in the canvas scope: ids).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ...SCOPE_PROP,
+          components: { type: 'array', items: { type: 'string' }, minItems: 1 },
+          dx: { type: 'integer' },
+          dy: { type: 'integer' },
+        },
+        required: ['components'],
+      },
+      annotations: { consequentialHint: true },
+      run: (args) => ws.move(scopeOf(args), args.components as string[], Number(args.dx ?? 0), Number(args.dy ?? 0)),
+    },
+    {
       name: 'clear',
-      description: 'Empty a scope (components, wires and buses). Finished chips stay in the library.',
+      description: 'Empty a scope (components, wires and buses). Finished chips stay in the library. Not allowed on the canvas scope.',
       inputSchema: { type: 'object', properties: { ...SCOPE_PROP } },
       annotations: { consequentialHint: true },
       run: (args) => {
@@ -229,15 +257,42 @@ export function createTools(ws: Workspace, hooks: ToolHooks = {}): ToolDef[] {
       },
     },
   ];
+  if (hooks.canvas) {
+    const canvas = hooks.canvas;
+    tools.push(
+      {
+        name: 'open_canvas',
+        description:
+          'Copy what the user has built on the canvas into the scope "canvas" (call it again to start over from the current canvas). ' +
+          'Components are addressed by id: use describe with scope "canvas" to see ids, types, labels and wires. ' +
+          'Then edit it with build, remove and move (scope "canvas") and try it with simulate, and when it is right call apply_to_canvas. ' +
+          'Nothing on the canvas changes until then.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: { readOnlyHint: true },
+        run: () => canvas.open(ws),
+      },
+      {
+        name: 'apply_to_canvas',
+        description:
+          'Apply what you added, removed and moved in the scope "canvas" to the real canvas. Only that difference is applied, so everything else stays ' +
+          'exactly as it is. New components are placed to the right of the existing ones. If the user changed the canvas after open_canvas, nothing is applied.',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: { consequentialHint: true },
+        run: () => canvas.apply(ws),
+      },
+    );
+  }
   if (hooks.publishToCanvas) {
     const publish = hooks.publishToCanvas;
     tools.push({
       name: 'publish_to_canvas',
       description:
-        'Show the "main" circuit and the chips you built on the user\'s canvas. It is added next to what is already there; nothing is removed.',
-      inputSchema: { type: 'object', properties: {} },
+        'Show the "main" circuit and the chips you built on the user\'s canvas. It is added next to what is already there; nothing is removed. ' +
+        'replace: [chip names] additionally updates those canvas chips in place (they must have been rebuilt with begin_chip replace: true and finished); ' +
+        'main may then be empty. Everything is checked first: on any problem nothing changes.',
+      inputSchema: { type: 'object', properties: { replace: { type: 'array', items: { type: 'string' } } } },
       annotations: { consequentialHint: true },
-      run: () => publish(ws),
+      run: (args) => publish(ws, { replace: args.replace as string[] | undefined }),
     });
   }
   return tools;
@@ -245,8 +300,61 @@ export function createTools(ws: Workspace, hooks: ToolHooks = {}): ToolDef[] {
 
 export type ToolResult = { ok: true } & Record<string, unknown> | { ok: false; error: string };
 
+type Schema = {
+  type?: string;
+  properties?: Record<string, Schema>;
+  required?: string[];
+  items?: Schema;
+  additionalProperties?: Schema;
+  minItems?: number;
+  minimum?: number;
+  enum?: unknown[];
+  anyOf?: Schema[];
+};
+
+function kindOf(value: unknown): string {
+  return value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+}
+
+/** The browser does not check arguments against inputSchema, so the keywords used above are enforced here. */
+export function validateArgs(schema: Schema, value: unknown, path = 'arguments'): string | undefined {
+  if (schema.anyOf) {
+    const errors = schema.anyOf.map((s) => validateArgs(s, value, path));
+    return errors.some((e) => e === undefined) ? undefined : `${path}: ${errors[0]!.replace(/^[^:]*: /, '')}`;
+  }
+  if (schema.enum && !schema.enum.includes(value)) return `${path}: must be one of ${schema.enum.map((v) => JSON.stringify(v)).join(', ')}`;
+  const kind = kindOf(value);
+  if (schema.type === 'integer') {
+    if (typeof value !== 'number' || !Number.isInteger(value)) return `${path}: expected an integer, got ${kind === 'number' ? value : kind}`;
+    if (schema.minimum !== undefined && value < schema.minimum) return `${path}: must be at least ${schema.minimum}`;
+  } else if (schema.type && schema.type !== kind) {
+    return `${path}: expected ${schema.type}, got ${kind}`;
+  }
+  if (schema.type === 'array') {
+    const list = value as unknown[];
+    if (schema.minItems !== undefined && list.length < schema.minItems) return `${path}: needs at least ${schema.minItems} entries`;
+    for (let i = 0; i < list.length && schema.items; i++) {
+      const error = validateArgs(schema.items, list[i], `${path}[${i}]`);
+      if (error) return error;
+    }
+  }
+  if (schema.type === 'object') {
+    const obj = value as Record<string, unknown>;
+    for (const key of schema.required ?? []) if (obj[key] === undefined) return `${path}: missing "${key}"`;
+    for (const [key, v] of Object.entries(obj)) {
+      const sub = schema.properties?.[key] ?? schema.additionalProperties;
+      if (!sub) return `${path}: unknown "${key}"; expected ${Object.keys(schema.properties ?? {}).join(', ') || 'no arguments'}`;
+      const error = validateArgs(sub, v, key === '' ? path : `${path === 'arguments' ? '' : `${path}.`}${key}`);
+      if (error) return error;
+    }
+  }
+  return undefined;
+}
+
 export function runTool(tool: ToolDef, args: Record<string, unknown> | undefined): ToolResult {
   try {
+    const problem = validateArgs(tool.inputSchema as Schema, args ?? {});
+    if (problem) return { ok: false, error: problem };
     const result = tool.run(args ?? {});
     return { ok: true, ...(result as Record<string, unknown>) };
   } catch (e) {

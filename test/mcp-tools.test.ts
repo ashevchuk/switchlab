@@ -99,6 +99,42 @@ describe('MCP tools', () => {
     expect(call('delete_chip', { name: 'AND' })).toMatchObject({ ok: false });
   });
 
+  it('rejects arguments that do not match the schema with a message that says what to fix', () => {
+    const { call } = toolsByName();
+    expect(call('simulate', { inputs: 'nope' })).toEqual({ ok: false, error: 'inputs: expected object, got string' });
+    expect(call('simulate', { inputs: { a: 1.5 } })).toEqual({ ok: false, error: 'inputs.a: expected an integer, got 1.5' });
+    expect(call('build', { component: [] })).toEqual({
+      ok: false,
+      error: 'arguments: unknown "component"; expected scope, components, wires',
+    });
+    expect(call('build', { components: [{ name: 'a' }] })).toEqual({ ok: false, error: 'components[0]: missing "type"' });
+    expect(call('build', { components: [{ name: 'a', type: 'input', count: 0 }] })).toEqual({ ok: false, error: 'components[0].count: must be at least 1' });
+    expect(call('build', { wires: [['only-one']] })).toEqual({ ok: false, error: 'wires[0]: needs at least 2 entries' });
+    expect(call('finish_chip', { scope: 's', ports: [{ name: 'a', dir: 'sideways', pin: 'x' }] })).toEqual({
+      ok: false,
+      error: 'ports[0].dir: must be one of "in", "out"',
+    });
+    expect(call('begin_chip', {})).toEqual({ ok: false, error: 'arguments: missing "name"' });
+  });
+
+  it('offers the canvas tools only when the host provides them, and passes replace through', () => {
+    expect(toolsByName().tools.map((t) => t.name)).not.toContain('open_canvas');
+    const seen: unknown[] = [];
+    const hosted = toolsByName({
+      canvas: { open: () => ({ components: 3, wires: 2 }), apply: () => ({ addedComponents: 1 }) },
+      publishToCanvas: (_ws: unknown, options: unknown) => {
+        seen.push(options);
+        return { placedComponents: 0, chips: [], replaced: ['X'] };
+      },
+    });
+    expect(hosted.call('open_canvas')).toEqual({ ok: true, components: 3, wires: 2 });
+    expect(hosted.call('apply_to_canvas')).toEqual({ ok: true, addedComponents: 1 });
+    expect(hosted.call('publish_to_canvas', { replace: ['X'] })).toMatchObject({ ok: true, replaced: ['X'] });
+    expect(seen).toEqual([{ replace: ['X'] }]);
+    expect(hosted.call('publish_to_canvas', { replace: 'X' })).toEqual({ ok: false, error: 'replace: expected array, got string' });
+    expect(hosted.call('move', { components: ['a'], dx: 'far' })).toEqual({ ok: false, error: 'dx: expected an integer, got string' });
+  });
+
   it('offers publish_to_canvas only when the host provides it', () => {
     expect(toolsByName().tools.map((t) => t.name)).not.toContain('publish_to_canvas');
     const hosted = toolsByName({ publishToCanvas: () => ({ placedComponents: 3, chips: [] }) });

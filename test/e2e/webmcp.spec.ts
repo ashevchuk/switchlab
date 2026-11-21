@@ -127,4 +127,66 @@ test.describe('WebMCP tools', () => {
     expect(run.published).toMatchObject({ ok: true, chips: [] });
     expect(problems).toEqual([]);
   });
+
+  test('agent edits the user canvas and rebuilds a canvas chip in place; undo takes the edit back', async ({ page }) => {
+    const problems: string[] = [];
+    page.on('pageerror', (e) => problems.push(e.message));
+    await page.addInitScript(() => {
+      const tools = new Map<string, { execute(args: unknown): Promise<unknown> }>();
+      Object.defineProperty(document, 'modelContext', {
+        value: { registerTool: async (t: { name: string; execute(args: unknown): Promise<unknown> }) => void tools.set(t.name, t) },
+      });
+      (window as unknown as { __tools: typeof tools }).__tools = tools;
+    });
+    const withCall = <T>(fn: (call: (name: string, args?: unknown) => Promise<Record<string, unknown>>) => Promise<T>) =>
+      page.evaluate(`(async () => {
+        const call = async (name, args = {}) => JSON.parse(JSON.stringify(await window.__tools.get(name).execute(args)));
+        return (${fn.toString()})(call);
+      })()`) as Promise<T>;
+    const canvasSize = () =>
+      page.evaluate(() => (window as unknown as { __simTest: { editor: { circuit: { components: Map<string, unknown> } } } }).__simTest.editor.circuit.components.size);
+
+    await page.goto(`file://${indexHtml}`);
+    await expect(page.locator('#canvas')).toBeVisible();
+    await page.waitForTimeout(400);
+
+    const edited = await withCall(async (call) => {
+      const opened = await call('open_canvas');
+      const described = (await call('describe', { scope: 'canvas' })) as { components: { name: string; type: string }[] };
+      await call('build', { scope: 'canvas', components: [{ name: 'extra', type: 'input' }, { name: 'tap', type: 'probe' }], wires: [['extra', 'tap']] });
+      const applied = await call('apply_to_canvas');
+      return { opened, types: described.components.map((c) => c.type), applied };
+    });
+    expect(edited.opened).toMatchObject({ ok: true });
+    expect(edited.types).toEqual(expect.arrayContaining(['vcc', 'gnd', 'transistor', 'button', 'led', 'probe']));
+    expect(edited.applied).toMatchObject({ ok: true, addedComponents: 2, addedWires: 1, removedComponents: 0 });
+    const afterApply = await canvasSize();
+    await page.locator('#canvas').click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press('Control+z');
+    expect(await canvasSize()).toBe(afterApply - 2);
+
+    await withCall(async (call) => {
+      await call('begin_chip', { name: 'BUF2' });
+      await call('build', { scope: 'BUF2', components: [{ name: 'a', type: 'NOT' }, { name: 'b', type: 'NOT' }], wires: [['a.out', 'b.in']] });
+      await call('finish_chip', { scope: 'BUF2', ports: [{ name: 'in', dir: 'in', pin: 'a.in' }, { name: 'out', dir: 'out', pin: 'b.out' }] });
+      await call('build', { components: [{ name: 'u', type: 'BUF2' }] });
+      return call('publish_to_canvas');
+    });
+    await page.waitForTimeout(2500);
+    await page.reload();
+    await expect(page.locator('#canvas')).toBeVisible();
+    await page.waitForTimeout(600);
+
+    const replaced = await withCall(async (call) => {
+      await call('begin_chip', { name: 'BUF2', replace: true });
+      await call('build', { scope: 'BUF2', components: [{ name: 'a', type: 'NOT' }] });
+      await call('finish_chip', { scope: 'BUF2', ports: [{ name: 'in', dir: 'in', pin: 'a.in' }, { name: 'out', dir: 'out', pin: 'a.out' }] });
+      const table = await call('truth_table', { name: 'BUF2' });
+      const published = await call('publish_to_canvas', { replace: ['BUF2'] });
+      return { table, published };
+    });
+    expect((replaced.table as unknown as { rows: { out: { out: number } }[] }).rows.map((r) => r.out.out)).toEqual([1, 0]);
+    expect(replaced.published).toMatchObject({ ok: true, placedComponents: 0, replaced: ['BUF2'] });
+    expect(problems).toEqual([]);
+  });
 });

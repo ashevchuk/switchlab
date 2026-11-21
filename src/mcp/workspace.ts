@@ -14,9 +14,10 @@ import { initialState, step } from '../sim/solver.js';
 import { layoutLayered } from './layout.js';
 import { clearSoftLabStateDeep } from '../sim/softLab.js';
 import { isStdcellName, seedStandardCells } from '../sim/stdcells.js';
-import type { Component, Level, Pin, Point, SimState } from '../sim/types.js';
+import type { Component, Level, Pin, Point, SimState, Wire } from '../sim/types.js';
 
 export const MAIN_SCOPE = 'main';
+export const CANVAS_SCOPE = 'canvas';
 
 const MIN_TICKS = 4;
 const MAX_SETTLE_ROUNDS = 16;
@@ -92,7 +93,7 @@ export interface ChipTestResult {
 }
 
 export interface Description {
-  components: { name: string; type: string }[];
+  components: { name: string; type: string; label?: string }[];
   buses: Record<string, string[]>;
   wires: [string, string][];
 }
@@ -104,6 +105,23 @@ export interface LibraryEntry {
   origin?: 'canvas';
   /** The canvas copy was edited after this chip was imported; delete_chip it and list_library again to re-import. */
   outOfDate?: true;
+  /** A new version is being (or has been) built here and replaces the canvas chip on publish. */
+  pendingReplace?: true;
+}
+
+/** What the canvas looked like when the sandbox copy was taken, to tell later what was edited. */
+export interface CanvasBase {
+  positions: Map<string, Point>;
+  wires: Set<string>;
+}
+
+export interface CanvasDiff {
+  base: CanvasBase;
+  removedComponents: string[];
+  addedComponents: Component[];
+  moved: { id: string; dx: number; dy: number }[];
+  removedWires: string[];
+  addedWires: Wire[];
 }
 
 interface Scope {
@@ -112,10 +130,20 @@ interface Scope {
   buses: Map<string, string[]>;
   placedCount: number;
   state: SimState;
+  /** Where the first new component goes; a sandbox copy of the canvas starts to the right of it. */
+  origin: Point;
+  canvasBase?: CanvasBase;
 }
 
 function newScope(): Scope {
-  return { circuit: new Circuit(), byName: new Map(), buses: new Map(), placedCount: 0, state: initialState() };
+  return { circuit: new Circuit(), byName: new Map(), buses: new Map(), placedCount: 0, state: initialState(), origin: { x: 0, y: 0 } };
+}
+
+function snapshotCanvas(circuit: Circuit): CanvasBase {
+  return {
+    positions: new Map([...circuit.components.values()].map((c) => [c.id, { x: c.pos.x, y: c.pos.y }])),
+    wires: new Set(circuit.wires.keys()),
+  };
 }
 
 function levelChar(level: Level): string {
@@ -167,6 +195,8 @@ export class Workspace {
   readonly library = new ChipLibrary();
   private readonly scopes = new Map<string, Scope>([[MAIN_SCOPE, newScope()]]);
   private readonly importedIds = new Set<string>();
+  /** Canvas chips being rebuilt in place, by name, with the canvas revision they started from. */
+  private readonly replacing = new Map<string, { id: string; baseRevision: number }>();
 
   /** `canvasLibrary` gives access to the chips on the user's canvas; they become usable here, under the same ids. */
   constructor(private readonly canvasLibrary?: () => ChipLibrary) {
@@ -196,7 +226,8 @@ export class Workspace {
     return this.library.list().map((def) => {
       const entry: LibraryEntry = { name: def.name, ports: chipPortDirs(def) };
       if (this.importedIds.has(def.id)) entry.origin = 'canvas';
-      if (live?.has(def.id) && (live.get(def.id).revision ?? 0) !== (def.revision ?? 0)) entry.outOfDate = true;
+      if (this.replacing.get(def.name)?.id === def.id) entry.pendingReplace = true;
+      else if (live?.has(def.id) && (live.get(def.id).revision ?? 0) !== (def.revision ?? 0)) entry.outOfDate = true;
       return entry;
     });
   }
@@ -232,15 +263,82 @@ export class Workspace {
       const pins = Object.values(comp.pins as Record<string, Pin>);
       for (const pin of pins) refOfPin.set(pin.id, pins.length === 1 ? name : `${name}.${pin.name}`);
       const type = comp.kind === 'chip' ? this.library.get(comp.defId).name : comp.kind === 'source' ? (comp.value === 1 ? 'vcc' : 'gnd') : comp.kind;
-      components.push({ name, type });
+      const label = comp.kind === 'label' ? comp.name : (comp as { label?: string }).label;
+      components.push(label ? { name, type, label } : { name, type });
     }
     const wires = [...scope.circuit.wires.values()].map((w): [string, string] => [refOfPin.get(w.a) ?? w.a, refOfPin.get(w.b) ?? w.b]);
     return { components, buses: Object.fromEntries(scope.buses), wires };
   }
 
   clear(scopeName = MAIN_SCOPE): void {
-    this.scope(scopeName);
+    if (this.scope(scopeName).canvasBase) {
+      throw new WorkspaceError('the canvas scope mirrors the user\'s canvas: remove what you added, or call open_canvas again to start over from the current canvas');
+    }
     this.scopes.set(scopeName, newScope());
+  }
+
+  /**
+   * Copies the canvas into the `canvas` scope. Its components are addressed by their ids (see describe);
+   * edits stay here until applied, and can be simulated like any other scope.
+   */
+  openCanvas(top: Circuit): { components: number; wires: number } {
+    const live = this.canvasLibrary?.();
+    if (!live) throw new WorkspaceError('no canvas is attached to this workspace');
+    this.importCanvasChips();
+    const copy = deserializeProject(serializeSlimStdcells(top, live));
+    for (const def of copy.library.list()) {
+      if (this.library.has(def.id)) continue;
+      this.library.register(def);
+      this.importedIds.add(def.id);
+    }
+    resolveStdcellInstances(copy.topCircuit, this.library);
+    const scope = newScope();
+    scope.circuit = copy.topCircuit;
+    for (const comp of copy.topCircuit.components.values()) scope.byName.set(comp.id, comp);
+    scope.canvasBase = snapshotCanvas(copy.topCircuit);
+    const xs = [...copy.topCircuit.components.values()].map((c) => c.pos.x);
+    const ys = [...copy.topCircuit.components.values()].map((c) => c.pos.y);
+    if (xs.length > 0) scope.origin = { x: Math.max(...xs) + GRID_PITCH.x, y: Math.min(...ys) };
+    this.scopes.set(CANVAS_SCOPE, scope);
+    return { components: copy.topCircuit.components.size, wires: copy.topCircuit.wires.size };
+  }
+
+  /** What was added, removed and moved in the canvas scope since it was opened or last applied. */
+  canvasDiff(): CanvasDiff {
+    const scope = this.scopes.get(CANVAS_SCOPE);
+    const base = scope?.canvasBase;
+    if (!scope || !base) throw new WorkspaceError('call open_canvas first');
+    const circuit = scope.circuit;
+    const moved: CanvasDiff['moved'] = [];
+    for (const comp of circuit.components.values()) {
+      const was = base.positions.get(comp.id);
+      if (was && (was.x !== comp.pos.x || was.y !== comp.pos.y)) moved.push({ id: comp.id, dx: comp.pos.x - was.x, dy: comp.pos.y - was.y });
+    }
+    return {
+      base,
+      removedComponents: [...base.positions.keys()].filter((id) => !circuit.components.has(id)),
+      addedComponents: [...circuit.components.values()].filter((c) => !base.positions.has(c.id)),
+      moved,
+      removedWires: [...base.wires].filter((id) => !circuit.wires.has(id)),
+      addedWires: [...circuit.wires.values()].filter((w) => !base.wires.has(w.id)),
+    };
+  }
+
+  /** The canvas now matches the canvas scope: later edits are measured from here. */
+  acceptCanvasApplied(): void {
+    const scope = this.scope(CANVAS_SCOPE);
+    scope.canvasBase = snapshotCanvas(scope.circuit);
+  }
+
+  move(scopeName: string, names: string[], dx: number, dy: number): { moved: number } {
+    const scope = this.scope(scopeName);
+    const comps = names.map((name) => {
+      const comp = scope.byName.get(name);
+      if (!comp) throw new WorkspaceError(`unknown component "${name}". Known: ${[...scope.byName.keys()].join(', ')}`);
+      return comp;
+    });
+    comps.forEach((comp) => scope.circuit.moveComponent(comp.id, dx, dy));
+    return { moved: comps.length };
   }
 
   build(scopeName: string, spec: BuildSpec): BuildResult {
@@ -269,7 +367,8 @@ export class Workspace {
     } finally {
       scope.circuit.endBatch();
     }
-    return { placed: addedComponents, wired: addedWires.length, warnings: this.unwiredChipPins(scope) };
+    const onlyNew = scope.canvasBase ? new Set(addedComponents) : undefined;
+    return { placed: addedComponents, wired: addedWires.length, warnings: this.unwiredChipPins(scope, onlyNew) };
   }
 
   simulate(scopeName: string, inputs: Record<string, number> = {}): SimulateResult {
@@ -360,23 +459,65 @@ export class Workspace {
     this.library.remove(def.id);
   }
 
-  beginChip(name: string): void {
+  /**
+   * Starts a chip. With `replace`, the chip is a new version of one that already lives on the canvas:
+   * finish_chip then keeps its ports and swaps its contents, and publishing updates the canvas chip in place.
+   */
+  beginChip(name: string, replace = false): void {
     this.importCanvasChips();
-    if (this.scopes.has(name) || this.library.findByName(name)) {
-      throw new WorkspaceError(`name already in use: ${name}`);
+    if (this.scopes.has(name)) throw new WorkspaceError(`name already in use: ${name}`);
+    const existing = this.library.findByName(name);
+    if (!replace) {
+      if (existing) throw new WorkspaceError(`name already in use: ${name}. To rebuild the canvas chip of that name, pass replace: true.`);
+    } else {
+      if (!existing || !this.canvasLibrary?.().has(existing.id)) throw new WorkspaceError(`no chip named ${name} on the canvas to replace`);
+      if (!this.replacing.has(name)) this.replacing.set(name, { id: existing.id, baseRevision: existing.revision ?? 0 });
     }
     this.scopes.set(name, newScope());
+  }
+
+  /** The finished replacement for a canvas chip, for publishing. */
+  replacementOf(name: string): { name: string; def: ChipDef; baseRevision: number } {
+    const entry = this.replacing.get(name);
+    if (!entry) throw new WorkspaceError(`${name} was not started with begin_chip replace: true`);
+    if (this.scopes.has(name)) throw new WorkspaceError(`${name} is not finished: call finish_chip first`);
+    return { name, def: this.library.get(entry.id), baseRevision: entry.baseRevision };
+  }
+
+  markReplaced(names: string[]): void {
+    names.forEach((name) => this.replacing.delete(name));
   }
 
   finishChip(scopeName: string, ports: ChipPortSpec[]): LibraryEntry {
     if (scopeName === MAIN_SCOPE) throw new WorkspaceError('main is not a chip scope; use begin_chip first');
     const scope = this.scope(scopeName);
     if (ports.length === 0) throw new WorkspaceError('a chip needs at least one port');
+    const replacing = this.replacing.get(scopeName);
+    if (replacing) return this.finishReplacement(scopeName, scope, ports, replacing.id);
     const exposed = this.resolveChipPorts(scope, ports);
     layoutLayered(scope.circuit);
     const def = foldExposing(scope.circuit, scopeName, this.library, exposed);
     this.scopes.delete(scopeName);
     return { name: def.name, ports: chipPortDirs(def) };
+  }
+
+  /** Swaps the contents of the existing chip definition, as dive-in editing does: every instance and dependent chip follows. */
+  private finishReplacement(scopeName: string, scope: Scope, ports: ChipPortSpec[], id: string): LibraryEntry {
+    const current = this.library.get(id);
+    const want = chipPortDirs(current).map((p) => `${p.name}:${p.dir}`);
+    const got = ports.map((p) => `${p.name}:${p.dir}`);
+    if (want.join(',') !== got.join(',')) {
+      throw new WorkspaceError(`a replacement must keep the chip's ports, in order. Expected: ${want.join(', ')}. Got: ${got.join(', ')}`);
+    }
+    const exposed = this.resolveChipPorts(scope, ports);
+    layoutLayered(scope.circuit);
+    const built = foldExposing(scope.circuit, scopeName, this.library, exposed);
+    this.library.remove(built.id);
+    current.circuit = built.circuit;
+    current.revision = (current.revision ?? 0) + 1;
+    this.library.register(current);
+    this.scopes.delete(scopeName);
+    return { name: current.name, ports: chipPortDirs(current) };
   }
 
   testChip(chipName: string, cases: ChipCase[]): ChipTestResult {
@@ -498,7 +639,7 @@ export class Workspace {
     const levels = new Map<string, Level>();
     const warnings: string[] = [];
     for (const [name, comp] of scope.byName) {
-      if (comp.kind !== 'probe') continue;
+      if (comp.kind !== 'probe' && comp.kind !== 'led') continue;
       const net = netMap.netOf.get(comp.pins.in.id);
       if (net !== undefined && state.contended.has(net)) warnings.push(`contention on net of ${name}`);
       levels.set(name, net === undefined ? 'Z' : (state.levelOf.get(net) ?? 'Z'));
@@ -514,7 +655,7 @@ export class Workspace {
 
   private nextPosition(scope: Scope): Point {
     const n = scope.placedCount++;
-    return { x: (n % GRID_COLUMNS) * GRID_PITCH.x, y: Math.floor(n / GRID_COLUMNS) * GRID_PITCH.y };
+    return { x: scope.origin.x + (n % GRID_COLUMNS) * GRID_PITCH.x, y: scope.origin.y + Math.floor(n / GRID_COLUMNS) * GRID_PITCH.y };
   }
 
   private placeSpec(scope: Scope, spec: ComponentSpec, placedNames: string[]): string[] {
@@ -637,7 +778,7 @@ export class Workspace {
     }
   }
 
-  private unwiredChipPins(scope: Scope): string[] {
+  private unwiredChipPins(scope: Scope, only?: Set<string>): string[] {
     const wired = new Set<string>();
     for (const w of scope.circuit.wires.values()) {
       wired.add(w.a);
@@ -645,6 +786,7 @@ export class Workspace {
     }
     const warnings: string[] = [];
     for (const [name, comp] of scope.byName) {
+      if (only && !only.has(name)) continue;
       if (comp.kind !== 'chip' && comp.kind !== 'probe') continue;
       for (const pin of Object.values(comp.pins as Record<string, Pin>)) {
         if (!wired.has(pin.id)) warnings.push(`${comp.kind === 'chip' ? `${name}.${pin.name}` : name} is not connected`);

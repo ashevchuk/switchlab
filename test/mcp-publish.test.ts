@@ -54,11 +54,13 @@ describe('appendWorkspace', () => {
     expect(result).toMatchObject({ placedComponents: 4, chips: ['NAND2'] });
     expect(top.components.get(keeper.id)).toBe(keeper);
     const added = [...top.components.values()].filter((c) => c.id !== keeper.id);
+    const { bounds } = result;
+    if (!bounds) throw new Error('publishing a circuit must report where it went');
     for (const c of added) {
-      expect(c.pos.x).toBeGreaterThanOrEqual(result.bounds.minX);
-      expect(c.pos.x).toBeLessThanOrEqual(result.bounds.maxX);
-      expect(c.pos.y).toBeGreaterThanOrEqual(result.bounds.minY);
-      expect(c.pos.y).toBeLessThanOrEqual(result.bounds.maxY);
+      expect(c.pos.x).toBeGreaterThanOrEqual(bounds.minX);
+      expect(c.pos.x).toBeLessThanOrEqual(bounds.maxX);
+      expect(c.pos.y).toBeGreaterThanOrEqual(bounds.minY);
+      expect(c.pos.y).toBeLessThanOrEqual(bounds.maxY);
     }
     expect(added.every((c) => c.pos.x >= 100 + 300)).toBe(true);
     expect(library.findByName('NAND2')).toBeDefined();
