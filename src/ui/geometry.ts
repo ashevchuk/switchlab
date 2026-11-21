@@ -1127,8 +1127,14 @@ function boundsHalfSize(c: Component): [number, number] {
         return [14, 14];
     }
   })();
-  return [hw + HIT_PAD, hh + HIT_PAD];
+  const turned = TURNING_PARTS.has(c.kind) && ((c as { rotation?: number }).rotation === 90 || (c as { rotation?: number }).rotation === 270);
+  return turned ? [hh + HIT_PAD, hw + HIT_PAD] : [hw + HIT_PAD, hh + HIT_PAD];
 }
+
+/** Parts whose body is drawn turned with their pins, so a quarter turn swaps the sides of the hit box. */
+const TURNING_PARTS: ReadonlySet<Component['kind']> = new Set([
+  'input', 'button', 'switch', 'clock', 'analyzer', 'sevenseg', 'busprobe', 'busswitch', 'buspass',
+]);
 
 /**
  * Pins sit on a part's outline, so wires leave it from within the hit box. `p` counts as inside

@@ -982,6 +982,22 @@ function drawBodyPinLabel(
   ctx.restore();
 }
 
+/** A body that turns with its pins: width and height swap for a quarter turn. */
+function turnedBody(c: Component, w: number, h: number): { w: number; h: number; turned: boolean } {
+  const { rotation } = getOrientation(c);
+  const turned = rotation === 90 || rotation === 270;
+  return turned ? { w: h, h: w, turned } : { w, h, turned };
+}
+
+/** Moves the canvas into a part's own frame (flip, then turn), for drawing that has to rotate with it; pair with save/restore. */
+function enterPartFrame(ctx: CanvasRenderingContext2D, c: Component): void {
+  const { rotation, mirrorX, mirrorY } = getOrientation(c);
+  ctx.translate(c.pos.x, c.pos.y);
+  if (mirrorX) ctx.scale(-1, 1);
+  if (mirrorY) ctx.scale(1, -1);
+  ctx.rotate((rotation * Math.PI) / 180);
+}
+
 /**
  * Enhancement MOSFET matching the lab reference card:
  * three thick channel bars, narrow gate gap, substrate stub from the
@@ -1259,8 +1275,7 @@ function drawComponent(
     }
     case 'input': {
       const { x, y } = c.pos;
-      const w = 24;
-      const h = 20;
+      const { w, h } = turnedBody(c, 24, 20);
       if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 6, ringColor);
       ctx.fillStyle = c.value === 1 ? '#3d2f14' : '#182233';
       roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 6);
@@ -1279,8 +1294,7 @@ function drawComponent(
       const on = c.value === 1;
       const toggle = c.mode === 'toggle';
       // Chassis plate
-      const pw = 34;
-      const ph = 30;
+      const { w: pw, h: ph, turned: plateTurned } = turnedBody(c, 34, 30);
       if (ringColor) glowRect(ctx, x - pw / 2, y - ph / 2, pw, ph, 6, ringColor);
       ctx.fillStyle = '#151820';
       roundRectPath(ctx, x - pw / 2, y - ph / 2, pw, ph, 5);
@@ -1315,15 +1329,20 @@ function drawComponent(
       ctx.fillStyle = COLOR.textDim;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(toggle ? 'TOG' : 'MOM', x, y + 11);
+      if (plateTurned) {
+        // The pin is at the bottom or top of a turned plate, so the caption goes beside it.
+        ctx.textAlign = 'left';
+        ctx.fillText(toggle ? 'TOG' : 'MOM', x + pw / 2 + 4, y);
+      } else {
+        ctx.fillText(toggle ? 'TOG' : 'MOM', x, y + 11);
+      }
       stubPin(x, y, pw / 2, ph / 2, c.pins.out);
       dot(c.pins.out);
       break;
     }
     case 'switch': {
       const { x, y } = c.pos;
-      const w = 36;
-      const h = 22;
+      const { w, h, turned } = turnedBody(c, 36, 22);
       if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 4, ringColor);
       ctx.fillStyle = '#151820';
       roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 4);
@@ -1336,29 +1355,36 @@ function drawComponent(
       dot(c.pins.in);
       dot(c.pins.out);
       // Knife blade: closed = bridge across, open = lifted toward out side.
+      ctx.save();
+      enterPartFrame(ctx, c);
       ctx.strokeStyle = c.closed ? '#8fd46a' : '#8a93a8';
       ctx.lineWidth = 2;
       ctx.lineCap = 'round';
       ctx.beginPath();
       if (c.closed) {
-        ctx.moveTo(x - 8, y);
-        ctx.lineTo(x + 8, y);
+        ctx.moveTo(-8, 0);
+        ctx.lineTo(8, 0);
       } else {
-        ctx.moveTo(x - 8, y);
-        ctx.lineTo(x + 6, y - 7);
+        ctx.moveTo(-8, 0);
+        ctx.lineTo(6, -7);
       }
       ctx.stroke();
+      ctx.restore();
       ctx.fillStyle = COLOR.textDim;
       ctx.font = '7px ui-monospace, "SF Mono", monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(c.closed ? 'ON' : 'OFF', x, y + 8);
+      if (turned) {
+        ctx.textAlign = 'left';
+        ctx.fillText(c.closed ? 'ON' : 'OFF', x + w / 2 + 4, y);
+      } else {
+        ctx.fillText(c.closed ? 'ON' : 'OFF', x, y + 8);
+      }
       break;
     }
     case 'clock': {
       const { x, y } = c.pos;
-      const w = 44;
-      const h = 32;
+      const { w, h } = turnedBody(c, 44, 32);
       const active = c.mode === 'oneshot' ? c.holdFrames > 0 : c.running;
       if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 6, ringColor);
       ctx.fillStyle = active ? '#1e2a38' : COLOR.body;
@@ -1374,11 +1400,21 @@ function drawComponent(
       ctx.save();
       ctx.font = '8px ui-monospace, "SF Mono", monospace';
       ctx.fillStyle = COLOR.textDim;
-      ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      ctx.fillText('OUT', c.pins.out.pos.x + 6, c.pins.out.pos.y);
-      ctx.textAlign = 'right';
-      ctx.fillText('TRIG', c.pins.trig.pos.x - 6, c.pins.trig.pos.y);
+      // A name goes beside its pin on a side edge, and above or below it on a top or bottom edge.
+      const tag = (text: string, pin: Pin) => {
+        const dx = pin.pos.x - x;
+        const dy = pin.pos.y - y;
+        if (Math.abs(dx) >= Math.abs(dy)) {
+          ctx.textAlign = dx >= 0 ? 'left' : 'right';
+          ctx.fillText(text, pin.pos.x + (dx >= 0 ? 6 : -6), pin.pos.y);
+        } else {
+          ctx.textAlign = 'center';
+          ctx.fillText(text, pin.pos.x, pin.pos.y + (dy >= 0 ? 9 : -9));
+        }
+      };
+      tag('OUT', c.pins.out);
+      tag('TRIG', c.pins.trig);
       ctx.restore();
       ctx.fillStyle = COLOR.selected;
       ctx.textAlign = 'center';
@@ -1390,8 +1426,7 @@ function drawComponent(
     case 'analyzer': {
       const { x, y } = c.pos;
       const n = c.channelCount;
-      const h = Math.max(36, (n - 1) * 20 + 28);
-      const w = 64;
+      const { w, h, turned } = turnedBody(c, 64, Math.max(36, (n - 1) * 20 + 28));
       if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 6, ringColor);
       ctx.fillStyle = c.armed ? '#1a2430' : COLOR.body;
       roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 6);
@@ -1399,27 +1434,34 @@ function drawComponent(
       ctx.strokeStyle = bodyStroke(c.armed ? COLOR.selected : COLOR.bodyStroke);
       ctx.lineWidth = selected || hovered ? 2 : 1.3;
       ctx.stroke();
+      let pinSideX = 0;
+      let pinSideY = 0;
       for (let i = 0; i < n; i++) {
         const p = c.pins[`ch${i}`];
         if (!p) continue;
         stubPin(x, y, w / 2, h / 2, p);
         dot(p);
-        drawBodyPinLabel(ctx, p, x, y, undefined, w, h);
+        drawBodyPinLabel(ctx, p, x, y, undefined, w, h, turned ? (p.pos.y < y ? 'top' : 'bottom') : undefined);
+        pinSideX += p.pos.x - x;
+        pinSideY += p.pos.y - y;
       }
+      // The caption goes on the side of the body away from the pins and their names.
+      const textX = turned ? x : x + (pinSideX > 0 ? -14 : 14);
+      const textY = turned ? y + (pinSideY > 0 ? -14 : 14) : y;
       ctx.fillStyle = COLOR.selected;
       ctx.font = '10px ui-monospace, "SF Mono", monospace';
       ctx.textAlign = 'center';
-      ctx.fillText('LA', x + 14, y - 8);
+      ctx.fillText('LA', textX, textY - 8);
       ctx.fillStyle = c.armed ? COLOR.wireHigh : COLOR.textDim;
-      ctx.fillText(c.armed ? 'REC' : `${n}ch`, x + 14, y + 8);
+      ctx.fillText(c.armed ? 'REC' : `${n}ch`, textX, textY + 8);
       break;
     }
     case 'busprobe': {
       const { x, y } = c.pos;
       const n = c.bitWidth;
-      // Match analyzer pitch so body edges don't steal corner pins for labels.
-      const h = Math.max(40, (n - 1) * 20 + 28);
-      const w = 78;
+      // The pin stack is the long side, so the body turns with its pins. Pitch matches the analyzer's so body
+      // edges do not steal corner pins for labels.
+      const { w, h, turned } = turnedBody(c, 78, Math.max(40, (n - 1) * 20 + 28));
       if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 6, ringColor);
       ctx.fillStyle = '#161a22';
       roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 6);
@@ -1428,6 +1470,7 @@ function drawComponent(
       ctx.lineWidth = selected || hovered ? 2 : 1.3;
       ctx.stroke();
       const levels: Array<{ level: Level; contended: boolean }> = [];
+      let pinSideSum = 0;
       for (let i = 0; i < n; i++) {
         const p = c.pins[`b${i}`];
         if (!p) {
@@ -1436,33 +1479,47 @@ function drawComponent(
         }
         stubPin(x, y, w / 2, h / 2, p);
         dot(p);
-        drawBodyPinLabel(ctx, p, x, y, undefined, w, h);
+        drawBodyPinLabel(ctx, p, x, y, undefined, w, h, turned ? (p.pos.y < y ? 'top' : 'bottom') : undefined);
+        pinSideSum += p.pos.y - y;
         const { level, contended } = resolve(p.id);
         levels.push({ level, contended });
       }
+      // The readout sits outside the body, so it never lands on the pin names inside it, and on the side away
+      // from the pins of a turned body, where the wires leave.
       const decoded = decodeBusProbe(levels, c.radix);
-      ctx.font = '10px ui-monospace, "SF Mono", monospace';
-      ctx.textAlign = 'center';
-      ctx.fillStyle = COLOR.textDim;
-      ctx.fillText(c.label?.trim() || `BUS${n}`, x + 12, y - h / 2 + 14);
-      ctx.fillStyle = decoded.value === null ? '#e0a060' : COLOR.selected;
       const prefix = c.radix === 'hex' ? '0x' : c.radix === 'bin' ? '0b' : '';
+      const below = turned && pinSideSum < 0;
+      const dir = below ? 1 : -1;
+      const edgeY = y + dir * (h / 2);
+      const nameText = `${c.label?.trim() || `BUS${n}`} `;
+      const valueText = `${prefix}${decoded.text}`;
+      ctx.save();
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
       ctx.font = '12px ui-monospace, "SF Mono", monospace';
-      ctx.fillText(`${prefix}${decoded.text}`, x + 12, y + 2);
+      const nameWidth = ctx.measureText(nameText).width;
+      const startX = x - (nameWidth + ctx.measureText(valueText).width) / 2;
+      ctx.fillStyle = COLOR.textDim;
+      ctx.fillText(nameText, startX, edgeY + dir * 12);
+      ctx.fillStyle = decoded.value === null ? '#e0a060' : COLOR.selected;
+      ctx.fillText(valueText, startX + nameWidth, edgeY + dir * 12);
       if (c.radix !== 'bin' && n <= 16) {
+        ctx.textAlign = 'center';
         ctx.fillStyle = COLOR.textDim;
         ctx.font = '9px ui-monospace, "SF Mono", monospace';
-        const bin = decoded.bitsMsbFirst;
-        const shown = bin.length > 12 ? `${bin.slice(0, 6)}…${bin.slice(-4)}` : bin;
-        ctx.fillText(shown, x + 12, y + 16);
+        ctx.fillText(decoded.bitsMsbFirst, x, edgeY + dir * 25);
       }
+      ctx.restore();
       break;
     }
     case 'busswitch': {
       const { x, y } = c.pos;
       const n = c.bitWidth;
-      const h = Math.max(44, (n - 1) * 20 + 28);
-      const w = BUS_SWITCH_BODY_W;
+      const long = Math.max(44, (n - 1) * 20 + 28);
+      const { w, h, turned } = turnedBody(c, BUS_SWITCH_BODY_W, long);
+      // Unit vector from the centre toward the pin bank; the readout strip is on the opposite side.
+      const side = busSwitchSideUnit(c);
+      const readoutAt = { x: x - side.x * (BUS_SWITCH_BODY_W / 2 - 22), y: y - side.y * (BUS_SWITCH_BODY_W / 2 - 22) };
       if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 5, ringColor);
       // Package
       ctx.fillStyle = '#181c14';
@@ -1483,21 +1540,22 @@ function drawComponent(
       ctx.textBaseline = 'middle';
       ctx.fillStyle = COLOR.textDim;
       ctx.font = '9px ui-monospace, "SF Mono", monospace';
-      ctx.fillText(c.label?.trim() || `DIP${n}`, x - w / 2 + 22, y - 10);
+      ctx.fillText(c.label?.trim() || `DIP${n}`, readoutAt.x, readoutAt.y - 10);
       ctx.fillStyle = COLOR.selected;
       ctx.font = '12px ui-monospace, "SF Mono", monospace';
-      ctx.fillText(`${prefix}${decoded.text}`, x - w / 2 + 22, y + 6);
+      ctx.fillText(`${prefix}${decoded.text}`, readoutAt.x, readoutAt.y + 6);
 
-      // Vertical divider between readout and DIP bank
+      // Divider between readout and DIP bank, across the pin axis
       ctx.strokeStyle = '#2e3828';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(x - 8, y - h / 2 + 6);
-      ctx.lineTo(x - 8, y + h / 2 - 6);
+      const dividerAt = { x: x - side.x * 8, y: y - side.y * 8 };
+      const along = { x: -side.y * (long / 2 - 6), y: side.x * (long / 2 - 6) };
+      ctx.moveTo(dividerAt.x + along.x, dividerAt.y + along.y);
+      ctx.lineTo(dividerAt.x - along.x, dividerAt.y - along.y);
       ctx.stroke();
 
       // Always stub onto the pin-bank side (not top/bottom for end bits).
-      const side = busSwitchSideUnit(c);
       const hw = w / 2;
       const hh = h / 2;
       for (let i = 0; i < n; i++) {
@@ -1514,7 +1572,7 @@ function drawComponent(
         }
         stub(ex, ey, p);
         dot(p);
-        drawBodyPinLabel(ctx, p, x, y, String(i), w, h);
+        drawBodyPinLabel(ctx, p, x, y, String(i), w, h, turned ? (p.pos.y < y ? 'top' : 'bottom') : undefined);
 
         const pad = busSwitchPaddleCenter(c, i);
         if (!pad) continue;
@@ -1537,8 +1595,7 @@ function drawComponent(
     case 'buspass': {
       const { x, y } = c.pos;
       const n = c.bitWidth;
-      const h = Math.max(44, (n - 1) * 20 + 28);
-      const w = BUS_PASS_BODY_W;
+      const { w, h, turned } = turnedBody(c, BUS_PASS_BODY_W, Math.max(44, (n - 1) * 20 + 28));
       if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 5, ringColor);
       ctx.fillStyle = '#141820';
       roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 5);
@@ -1550,14 +1607,22 @@ function drawComponent(
       ctx.textBaseline = 'middle';
       ctx.fillStyle = COLOR.textDim;
       ctx.font = '8px ui-monospace, "SF Mono", monospace';
-      ctx.fillText(c.label?.trim() || `SW×${n}`, x, y - h / 2 + 10);
+      const passName = c.label?.trim() || `SW×${n}`;
+      if (turned) {
+        // Both pin rows are on the top and bottom, so the name goes past the end of the body.
+        ctx.textAlign = 'left';
+        ctx.fillText(passName, x + w / 2 + 6, y);
+        ctx.textAlign = 'center';
+      } else {
+        ctx.fillText(passName, x, y - h / 2 + 10);
+      }
       for (let i = 0; i < n; i++) {
         const pa = c.pins[`a${i}`];
         const pb = c.pins[`b${i}`];
         if (pa) {
           stubPin(x, y, w / 2, h / 2, pa);
           dot(pa);
-          drawBodyPinLabel(ctx, pa, x, y, String(i), w, h);
+          drawBodyPinLabel(ctx, pa, x, y, String(i), w, h, turned ? (pa.pos.y < y ? 'top' : 'bottom') : undefined);
         }
         if (pb) {
           stubPin(x, y, w / 2, h / 2, pb);
@@ -1638,8 +1703,7 @@ function drawComponent(
     }
     case 'sevenseg': {
       const { x, y } = c.pos;
-      const w = 36;
-      const h = 52;
+      const { w, h } = turnedBody(c, 36, 52);
       if (ringColor) glowRect(ctx, x - w / 2, y - h / 2, w, h, 4, ringColor);
       ctx.fillStyle = '#14161c';
       roundRectPath(ctx, x - w / 2, y - h / 2, w, h, 4);
@@ -1656,13 +1720,16 @@ function drawComponent(
       };
       const dim = '#2a2e38';
       const on = c.color;
+      // The digit is drawn in the part's own frame, so it turns and flips with its pins.
+      ctx.save();
+      enterPartFrame(ctx, c);
       const seg = (x1: number, y1: number, x2: number, y2: number, active: boolean) => {
         ctx.strokeStyle = active ? on : dim;
         ctx.lineWidth = active ? 3.2 : 2.4;
         ctx.lineCap = 'round';
         ctx.beginPath();
-        ctx.moveTo(x + x1, y + y1);
-        ctx.lineTo(x + x2, y + y2);
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
         ctx.stroke();
       };
       // Classic 7-seg layout (common cathode, active-high).
@@ -1676,9 +1743,10 @@ function drawComponent(
       if (c.hasDp && c.pins.dp) {
         ctx.fillStyle = lit('dp') ? on : dim;
         ctx.beginPath();
-        ctx.arc(x + 16, y + 18, 2.5, 0, Math.PI * 2);
+        ctx.arc(16, 18, 2.5, 0, Math.PI * 2);
         ctx.fill();
       }
+      ctx.restore();
       for (const name of c.pinOrder) {
         const p = c.pins[name];
         if (!p) continue;

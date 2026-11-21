@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { Circuit } from '../src/sim/Circuit.js';
-import { makeInput, makeProbe } from '../src/sim/library.js';
+import { makeBusProbe, makeInput, makeProbe, makeSwitch } from '../src/sim/library.js';
 import {
   distanceToSegment,
+  findComponentNear,
   findSameNetTees,
   findWaypointNear,
   findWireNear,
@@ -301,5 +302,38 @@ describe('rawWirePolyline', () => {
     for (const w of wires) rawWirePolyline(circuit, w);
     // 3000 full rescans of 6000 pins take seconds; direct lookups take milliseconds.
     expect(performance.now() - started).toBeLessThan(500);
+  });
+});
+
+describe('hit box of a turned part', () => {
+  const hitAt = (c: Circuit, x: number, y: number) => findComponentNear(c, { x, y }) !== undefined;
+
+  it('swaps its sides for a quarter turn, because the body is drawn turned', () => {
+    const upright = new Circuit();
+    makeBusProbe(upright, 4, { x: 0, y: 0 });
+    const turned = new Circuit();
+    const bus = makeBusProbe(turned, 4, { x: 0, y: 0 });
+    bus.rotation = 90;
+    // A 4-bit bus probe is 84 wide by 88 tall before the pad of 6, so the long side is vertical.
+    expect(hitAt(upright, 0, 49)).toBe(true);
+    expect(hitAt(upright, 49, 0)).toBe(false);
+    expect(hitAt(turned, 49, 0)).toBe(true);
+    expect(hitAt(turned, 0, 49)).toBe(false);
+  });
+
+  it('leaves a half turn alone, and a part that is the same both ways', () => {
+    const half = new Circuit();
+    const bus = makeBusProbe(half, 4, { x: 0, y: 0 });
+    bus.rotation = 180;
+    expect(hitAt(half, 0, 49)).toBe(true);
+    expect(hitAt(half, 49, 0)).toBe(false);
+
+    const sw = new Circuit();
+    const sw1 = makeSwitch(sw, { x: 0, y: 0 });
+    expect(hitAt(sw, 25, 0)).toBe(true);
+    expect(hitAt(sw, 0, 19)).toBe(false);
+    sw1.rotation = 90;
+    expect(hitAt(sw, 0, 25)).toBe(true);
+    expect(hitAt(sw, 19, 0)).toBe(false);
   });
 });
